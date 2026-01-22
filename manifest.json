@@ -1,0 +1,21 @@
+{
+  "name": "LumiBot Remote",
+  "short_name": "LumiBot",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3680/3680989.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3680/3680989.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
