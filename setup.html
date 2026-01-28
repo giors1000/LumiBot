@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#6d28d9">
+
+    <title>LumiBot - Device Setup</title>
+    <meta name="description" content="Set up your LumiBot smart light device">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-512.png">
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
+
+    <style>
+        /* Setup Page - Mobile First */
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html,
+        body {
+            overflow-x: hidden;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            height: 100%;
+        }
+
+        .setup-page {
+            min-height: 100vh;
+            min-height: 100dvh;
+            /* Dynamic viewport height for mobile */
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            padding-top: max(16px, env(safe-area-inset-top));
+            padding-bottom: max(100px, calc(80px + env(safe-area-inset-bottom)));
+            /* Space for sticky nav */
+            background: var(--bg-primary);
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        .setup-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--accent);
+            font-weight: 600;
+            background: none;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 8px 0;
+            font-family: var(--font-family);
+        }
+
+        .theme-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: var(--bg-glass-strong);
+            border: 1px solid var(--border-glass);
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        /* Progress - Premium Edition */
+        .progress-section {
+            text-align: center;
+            margin-bottom: 28px;
+            flex-shrink: 0;
+        }
+
+        .progress-dots {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 14px;
+            position: relative;
+        }
+
+        /* Connecting line between dots */
+        .progress-connector {
+            width: 30px;
+            height: 2px;
+            background: var(--bg-tertiary);
+            border-radius: 1px;
+            transition: background 0.4s ease;
+        }
+
+        .progress-connector.active {
+            background: var(--success);
+        }
+
+        .progress-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            transition:
+                all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+                box-shadow 0.3s ease;
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .progress-dot.active {
+            background: var(--accent);
+            box-shadow:
+                0 0 20px var(--accent-glow),
+                0 0 40px var(--accent-glow);
+            transform: scale(1.3);
+            animation: dotPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes dotPulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 20px var(--accent-glow), 0 0 40px var(--accent-glow);
+            }
+
+            50% {
+                box-shadow: 0 0 30px var(--accent-glow), 0 0 60px var(--accent-glow);
+            }
+        }
+
+        .progress-dot.completed {
+            background: var(--success);
+            box-shadow: 0 0 15px var(--success-glow);
+        }
+
+        .progress-dot.completed::after {
+            content: '✓';
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 8px;
+            font-weight: 700;
+        }
+
+        .progress-label {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            font-weight: 500;
+        }
+
+        /* Steps - Enhanced Transitions */
+        .steps-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            /* Allow shrinking for scroll */
+        }
+
+        .step {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            /* Allow content to scroll */
+            animation: stepSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .step.active {
+            display: flex;
+        }
+
+        .step.exiting {
+            animation: stepSlideOut 0.3s ease forwards;
+        }
+
+        @keyframes stepSlideIn {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+                filter: blur(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+                filter: blur(0);
+            }
+        }
+
+        @keyframes stepSlideOut {
+            from {
+                opacity: 1;
+                transform: translateX(0);
+            }
+
+            to {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+        }
+
+
+        .step-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .step-title {
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+
+        .step-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .step-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            min-height: 0;
+            /* Critical for flex child scrolling */
+            padding-bottom: 16px;
+        }
+
+        /* Connection Cards */
+        .connection-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .connection-card {
+            background: var(--bg-glass);
+            border: 2px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .connection-card:active {
+            transform: scale(0.98);
+        }
+
+        .connection-card.selected {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .connection-icon {
+            font-size: 32px;
+            width: 56px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-glass-strong);
+            border-radius: 14px;
+            flex-shrink: 0;
+        }
+
+        .connection-info {
+            flex: 1;
+        }
+
+        .connection-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+
+        .connection-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        /* ============================================
+           SERVO CALIBRATION - NEW DESIGN
+           ============================================ */
+        .servo-calibration {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            max-width: 400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Servo Dial Visualization */
+        .servo-dial-container {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 20px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .servo-dial {
+            position: relative;
+            width: 220px;
+            height: 220px;
+            margin-bottom: 20px;
+        }
+
+        /* Outer ring with tick marks */
+        .servo-dial-ring {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            border: 3px solid var(--border-glass-strong);
+        }
+
+        /* Tick marks around the edge */
+        .servo-dial-ticks {
+            position: absolute;
+            inset: 0;
+        }
+
+        .servo-dial-tick {
+            position: absolute;
+            width: 2px;
+            height: 12px;
+            background: var(--text-tertiary);
+            left: 50%;
+            top: 6px;
+            transform-origin: center 104px;
+            border-radius: 1px;
+        }
+
+        .servo-dial-tick.major {
+            height: 16px;
+            width: 3px;
+            background: var(--text-secondary);
+            top: 4px;
+        }
+
+        /* Servo body (center circle) */
+        .servo-body {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(145deg, #3a3a4a 0%, #1a1a24 100%);
+            border-radius: 50%;
+            border: 3px solid #4a4a5a;
+            box-shadow:
+                0 4px 20px rgba(0, 0, 0, 0.4),
+                inset 0 2px 4px rgba(255, 255, 255, 0.1);
+            z-index: 10;
+        }
+
+        .servo-body::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(145deg, #5a5a6a 0%, #3a3a4a 100%);
+            border-radius: 50%;
+            border: 2px solid #6a6a7a;
+        }
+
+        /* Two-arm servo horn */
+        .servo-arm-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(0deg);
+            width: 160px;
+            height: 20px;
+            transform-origin: center center;
+            transition: transform 0.15s ease-out;
+            z-index: 5;
+        }
+
+        .servo-arm {
+            position: absolute;
+            top: 50%;
+            height: 12px;
+            background: linear-gradient(180deg, #e0e0e0 0%, #a0a0a0 50%, #c0c0c0 100%);
+            border-radius: 6px;
+            transform: translateY(-50%);
+            border: 1px solid #888;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .servo-arm.left {
+            left: 0;
+            width: 65px;
+            border-radius: 6px 3px 3px 6px;
+        }
+
+        .servo-arm.right {
+            right: 0;
+            width: 65px;
+            border-radius: 3px 6px 6px 3px;
+        }
+
+        /* Arm tips */
+        .servo-arm::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            width: 8px;
+            height: 8px;
+            background: #666;
+            border-radius: 50%;
+            transform: translateY(-50%);
+            border: 1px solid #555;
+        }
+
+        .servo-arm.left::before {
+            left: 4px;
+        }
+
+        .servo-arm.right::before {
+            right: 4px;
+        }
+
+        /* Screw holes on arms */
+        .servo-arm::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            width: 4px;
+            height: 4px;
+            background: #444;
+            border-radius: 50%;
+            transform: translateY(-50%);
+        }
+
+        .servo-arm.left::after {
+            left: 20px;
+        }
+
+        .servo-arm.right::after {
+            right: 20px;
+        }
+
+        /* Angle display badge */
+        .servo-angle-badge {
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--accent-gradient);
+            color: white;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 16px;
+            font-weight: 700;
+            box-shadow: 0 4px 15px var(--accent-glow);
+            z-index: 15;
+        }
+
+        /* Position markers */
+        .servo-dial-markers {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .servo-dial-marker {
+            position: absolute;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-tertiary);
+        }
+
+        .servo-dial-marker.m0 {
+            top: 50%;
+            left: -20px;
+            transform: translateY(-50%);
+        }
+
+        .servo-dial-marker.m90 {
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .servo-dial-marker.m180 {
+            top: 50%;
+            right: -28px;
+            transform: translateY(-50%);
+        }
+
+        /* Center button */
+        .center-btn {
+            width: 100%;
+            padding: 12px;
+            background: var(--bg-glass);
+            border: 2px solid var(--border-glass);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .center-btn:active {
+            transform: scale(0.98);
+        }
+
+        .center-btn:hover {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        /* Position Buttons */
+        .position-buttons {
+            display: flex;
+            gap: 12px;
+            width: 100%;
+        }
+
+        .position-btn {
+            flex: 1;
+            padding: 14px;
+            border-radius: 14px;
+            border: 2px solid var(--border-glass);
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .position-btn:active {
+            transform: scale(0.96);
+        }
+
+        .position-btn.active {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--accent);
+        }
+
+        .position-btn .value {
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+
+        .position-btn.off-btn.active {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .position-btn.off-btn.active .value {
+            color: var(--danger);
+        }
+
+        .position-btn.on-btn.active {
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .position-btn.on-btn.active .value {
+            color: var(--success);
+        }
+
+        /* Slider Control */
+        .slider-section {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 20px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .slider-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .slider-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--accent);
+        }
+
+        .angle-slider {
+            width: 100%;
+            height: 48px;
+            appearance: none;
+            -webkit-appearance: none;
+            background: linear-gradient(to right, var(--danger), #f59e0b, var(--success));
+            border-radius: 24px;
+            outline: none;
+            padding: 0 4px;
+        }
+
+        .angle-slider::-webkit-slider-thumb {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 44px;
+            height: 44px;
+            background: white;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            transition: transform 0.1s ease;
+        }
+
+        .angle-slider::-webkit-slider-thumb:active {
+            transform: scale(1.1);
+        }
+
+        .slider-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        /* Slider with precision buttons container */
+        .slider-with-buttons {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slider-with-buttons .angle-slider {
+            flex: 1;
+        }
+
+        .precision-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: var(--bg-glass-strong);
+            border: 2px solid var(--border-glass);
+            color: var(--text-primary);
+            font-size: 24px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .precision-btn:hover {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .precision-btn:active {
+            transform: scale(0.9);
+            background: var(--accent);
+            color: white;
+        }
+
+        /* Test Button */
+        .test-servo-btn {
+            width: 100%;
+            padding: 16px;
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 14px;
+            color: white;
+            font-family: var(--font-family);
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 20px var(--accent-glow);
+            margin-top: 8px;
+        }
+
+        .test-servo-btn:active {
+            transform: scale(0.98);
+        }
+
+        .test-servo-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Position Save Buttons */
+        .save-positions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .save-btn {
+            padding: 14px;
+            border-radius: 14px;
+            border: none;
+            font-family: var(--font-family);
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .save-btn:active {
+            transform: scale(0.96);
+        }
+
+        .save-btn.off {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+            border: 2px solid var(--danger);
+        }
+
+        .save-btn.on {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 2px solid var(--success);
+        }
+
+        .save-btn .icon {
+            font-size: 20px;
+        }
+
+        .save-btn .angle {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        /* WiFi Section */
+        .wifi-section {
+            max-width: 400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .scan-btn {
+            width: 100%;
+            padding: 14px;
+            margin-bottom: 16px;
+            background: var(--bg-glass-strong);
+            border: 1px solid var(--border-glass);
+            border-radius: 14px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .scan-btn:active {
+            transform: scale(0.98);
+        }
+
+        .wifi-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .wifi-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            background: var(--bg-glass);
+            border: 2px solid transparent;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .wifi-item:active {
+            transform: scale(0.98);
+        }
+
+        .wifi-item.selected {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .wifi-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .wifi-signal {
+            font-size: 18px;
+        }
+
+        .wifi-name {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 15px;
+        }
+
+        .wifi-lock {
+            font-size: 14px;
+            opacity: 0.6;
+        }
+
+        .password-input {
+            margin-top: 16px;
+            display: none;
+        }
+
+        .password-input.show {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .password-input label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .password-input input {
+            width: 100%;
+            padding: 14px;
+            background: var(--bg-glass);
+            border: 2px solid var(--border-glass);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 16px;
+            font-family: var(--font-family);
+        }
+
+        .password-input input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Success Section */
+        .success-section {
+            text-align: center;
+            padding: 32px 16px;
+        }
+
+        .success-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .success-title {
+            font-size: 24px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .success-message {
+            font-size: 15px;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+        }
+
+        .device-info-card {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: 14px;
+            padding: 16px;
+            max-width: 280px;
+            margin: 0 auto 24px;
+            text-align: left;
+        }
+
+        .device-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-glass);
+            font-size: 14px;
+        }
+
+        .device-info-row:last-child {
+            border-bottom: none;
+        }
+
+        .device-info-label {
+            color: var(--text-secondary);
+        }
+
+        .device-info-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Navigation - Sticky at bottom */
+        .step-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            padding-bottom: max(16px, env(safe-area-inset-bottom));
+            background: var(--bg-primary);
+            border-top: 1px solid var(--border-glass);
+            z-index: 100;
+            /* Premium glass effect */
+            background: linear-gradient(to top, var(--bg-primary) 0%, var(--bg-primary) 80%, transparent 100%);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .nav-btn {
+            flex: 1;
+            padding: 16px;
+            border-radius: 14px;
+            font-family: var(--font-family);
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .nav-btn.secondary {
+            background: var(--bg-glass-strong);
+            color: var(--text-primary);
+            border: 1px solid var(--border-glass);
+        }
+
+        .nav-btn.primary {
+            background: var(--accent-gradient);
+            color: white;
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+
+        .nav-btn:active {
+            transform: scale(0.98);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .nav-btn.loading {
+            position: relative;
+            color: transparent;
+        }
+
+        .nav-btn.loading::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            margin: -10px 0 0 -10px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        a.nav-btn {
+            text-decoration: none;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Arm Attachment Modal */
+        .arm-modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 3000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .arm-modal-backdrop.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .arm-modal {
+            background: var(--bg-secondary);
+            border-radius: 24px;
+            padding: 32px 24px;
+            max-width: 340px;
+            width: 100%;
+            text-align: center;
+            transform: scale(0.9) translateY(20px);
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .arm-modal-backdrop.visible .arm-modal {
+            transform: scale(1) translateY(0);
+        }
+
+        .arm-modal-icon {
+            font-size: 56px;
+            margin-bottom: 16px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
+        }
+
+        .arm-modal-title {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+        }
+
+        .arm-modal-desc {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        .arm-modal-note {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--success);
+            font-weight: 600;
+            padding: 10px 16px;
+            background: rgba(34, 197, 94, 0.1);
+            border-radius: 10px;
+            margin-bottom: 24px;
+        }
+
+        .arm-modal-btn {
+            width: 100%;
+            padding: 16px;
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 14px;
+            color: white;
+            font-family: var(--font-family);
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 20px var(--accent-glow);
+            transition: all 0.2s ease;
+        }
+
+        .arm-modal-btn:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="setup-page">
+        <!-- Header -->
+        <header class="setup-header">
+            <button class="back-btn" id="backBtn">← Back</button>
+            <button class="theme-btn" id="themeToggle">🌙</button>
+        </header>
+
+        <!-- Progress -->
+        <div class="progress-section">
+            <div class="progress-dots">
+                <div class="progress-dot active" data-step="1"></div>
+                <div class="progress-dot" data-step="2"></div>
+                <div class="progress-dot" data-step="3"></div>
+                <div class="progress-dot" data-step="4"></div>
+            </div>
+            <div class="progress-label">Step <span id="currentStep">1</span> of 4</div>
+        </div>
+
+        <!-- Steps -->
+        <div class="steps-wrapper">
+
+            <!-- Step 1: Connection Method -->
+            <div class="step active" data-step="1">
+                <div class="step-header">
+                    <h1 class="step-title">Connect Device</h1>
+                    <p class="step-subtitle">Choose how to connect to your LumiBot</p>
+                </div>
+
+                <div class="step-content">
+                    <div class="connection-grid">
+                        <div class="connection-card" data-method="bluetooth">
+                            <div class="connection-icon">📶</div>
+                            <div class="connection-info">
+                                <h3 class="connection-title">Bluetooth</h3>
+                                <p class="connection-desc">Quick wireless setup using BLE</p>
+                            </div>
+                        </div>
+
+                        <div class="connection-card" data-method="wifi">
+                            <div class="connection-icon">📡</div>
+                            <div class="connection-info">
+                                <h3 class="connection-title">WiFi Direct</h3>
+                                <p class="connection-desc">Connect to device hotspot</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="step-nav">
+                    <a href="index.html" class="nav-btn secondary">Cancel</a>
+                    <button class="nav-btn primary" id="step1Next" disabled>Continue</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Servo Calibration -->
+            <div class="step" data-step="2">
+                <div class="step-header">
+                    <h1 class="step-title">Calibrate Servo</h1>
+                    <p class="step-subtitle">Set positions for your light switch</p>
+                </div>
+
+                <div class="step-content">
+                    <div class="servo-calibration">
+                        <!-- Servo Visualization -->
+                        <div class="servo-dial-container">
+                            <div class="servo-dial">
+                                <!-- Outer ring -->
+                                <div class="servo-dial-ring"></div>
+
+                                <!-- Tick marks -->
+                                <div class="servo-dial-ticks">
+                                    <div class="servo-dial-tick major" style="transform: rotate(-90deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(-75deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(-60deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(-45deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(-30deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(-15deg);"></div>
+                                    <div class="servo-dial-tick major" style="transform: rotate(0deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(15deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(30deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(45deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(60deg);"></div>
+                                    <div class="servo-dial-tick" style="transform: rotate(75deg);"></div>
+                                    <div class="servo-dial-tick major" style="transform: rotate(90deg);"></div>
+                                </div>
+
+                                <!-- Angle markers -->
+                                <div class="servo-dial-markers">
+                                    <span class="servo-dial-marker m0">0°</span>
+                                    <span class="servo-dial-marker m90">90°</span>
+                                    <span class="servo-dial-marker m180">180°</span>
+                                </div>
+
+                                <!-- Two-arm servo horn -->
+                                <div class="servo-arm-container" id="servoArm">
+                                    <div class="servo-arm left"></div>
+                                    <div class="servo-arm right"></div>
+                                </div>
+
+                                <!-- Servo body (center) -->
+                                <div class="servo-body"></div>
+
+                                <!-- Angle badge -->
+                                <div class="servo-angle-badge" id="angleBadge">90°</div>
+                            </div>
+
+                            <!-- Center button -->
+                            <button class="center-btn" id="centerBtn">
+                                ⟲ Center to 90°
+                            </button>
+
+                            <div class="position-buttons">
+                                <button class="position-btn off-btn" id="goOffBtn">
+                                    <span>🔴 OFF</span>
+                                    <span class="value" id="offDisplay">45°</span>
+                                </button>
+                                <button class="position-btn on-btn" id="goOnBtn">
+                                    <span>🟢 ON</span>
+                                    <span class="value" id="onDisplay">135°</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Slider Control with Precision Buttons -->
+                        <div class="slider-section">
+                            <div class="slider-header">
+                                <span class="slider-title">Adjust Angle</span>
+                                <span class="slider-value" id="sliderValue">90°</span>
+                            </div>
+                            <div class="slider-with-buttons">
+                                <button class="precision-btn" id="angleDecrease" title="Decrease by 1°">−</button>
+                                <input type="range" class="angle-slider" id="angleSlider" min="0" max="180" value="90">
+                                <button class="precision-btn" id="angleIncrease" title="Increase by 1°">+</button>
+                            </div>
+                            <div class="slider-labels">
+                                <span>0°</span>
+                                <span>90°</span>
+                                <span>180°</span>
+                            </div>
+                        </div>
+
+                        <!-- Save Position Buttons -->
+                        <div class="save-positions">
+                            <button class="save-btn off" id="saveOffBtn">
+                                <span class="icon">🔴</span>
+                                <span>Set as OFF</span>
+                                <span class="angle" id="savedOff">45°</span>
+                            </button>
+                            <button class="save-btn on" id="saveOnBtn">
+                                <span class="icon">🟢</span>
+                                <span>Set as ON</span>
+                                <span class="angle" id="savedOn">135°</span>
+                            </button>
+                        </div>
+
+                        <!-- Test Button -->
+                        <button class="test-servo-btn" id="testServoBtn">
+                            🔄 Test Current Position
+                        </button>
+                    </div>
+                </div>
+
+                <div class="step-nav">
+                    <button class="nav-btn secondary" id="step2Back">Back</button>
+                    <button class="nav-btn primary" id="step2Next">Continue</button>
+                </div>
+            </div>
+
+            <!-- Step 3: WiFi -->
+            <div class="step" data-step="3">
+                <div class="step-header">
+                    <h1 class="step-title">WiFi Network</h1>
+                    <p class="step-subtitle">Connect to your home network</p>
+                </div>
+
+                <div class="step-content">
+                    <div class="wifi-section">
+                        <button class="scan-btn" id="scanWifi">🔍 Scan for Networks</button>
+
+                        <div class="wifi-list" id="wifiList">
+                            <p style="text-align: center; color: var(--text-tertiary); padding: 20px;">
+                                Tap scan to find networks
+                            </p>
+                        </div>
+
+                        <div class="password-input" id="passwordSection">
+                            <label>WiFi Password</label>
+                            <input type="password" id="wifiPassword" placeholder="Enter password">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="step-nav">
+                    <button class="nav-btn secondary" id="step3Back">Back</button>
+                    <button class="nav-btn primary" id="step3Next">Connect</button>
+                </div>
+            </div>
+
+            <!-- Step 4: Complete -->
+            <div class="step" data-step="4">
+                <div class="step-content">
+                    <div class="success-section">
+                        <div class="success-icon">✅</div>
+                        <h1 class="success-title">Setup Complete!</h1>
+                        <p class="success-message">Your LumiBot is ready to use</p>
+
+                        <div class="device-info-card">
+                            <div class="device-info-row">
+                                <span class="device-info-label">Device ID</span>
+                                <span class="device-info-value" id="finalDeviceId">----</span>
+                            </div>
+                            <div class="device-info-row">
+                                <span class="device-info-label">WiFi</span>
+                                <span class="device-info-value" id="finalWifi">Connected</span>
+                            </div>
+                            <div class="device-info-row">
+                                <span class="device-info-label">Status</span>
+                                <span class="device-info-value" style="color: var(--success);">● Online</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="step-nav">
+                    <a href="index.html" class="nav-btn primary">Go to Dashboard</a>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Arm Attachment Modal -->
+    <div class="arm-modal-backdrop" id="armModal">
+        <div class="arm-modal">
+            <div class="arm-modal-icon">🔧</div>
+            <h2 class="arm-modal-title">Attach the Servo Arm</h2>
+            <p class="arm-modal-desc">
+                The servo is centered at 90°. Attach the arm so it points straight toward your light switch.
+            </p>
+            <div class="arm-modal-note">
+                <span>✓</span>
+                <span>Servo is centered and ready</span>
+            </div>
+            <button class="arm-modal-btn" id="armModalClose">I've Attached the Arm</button>
+        </div>
+    </div>
+
+    <!-- App Modules v1.0.0 - app.js MUST load first (debug logging) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="app.js?v=1.0.0"></script>
+    <script src="auth.js?v=1.0.0"></script>
+    <script src="device-service.js?v=1.0.0"></script>
+    <script src="setup.js?v=1.0.0"></script>
+</body>
+
+</html>
