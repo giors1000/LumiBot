@@ -1,0 +1,60 @@
+{
+  "name": "LumiBot Remote",
+  "short_name": "LumiBot",
+  "description": "Control your smart light devices with LumiBot - motion-activated lighting control",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "lumibot-remote",
+  "display": "standalone",
+  "background_color": "#050507",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": [
+    "utilities",
+    "lifestyle",
+    "entertainment"
+  ],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add Device",
+      "short_name": "Add",
+      "description": "Add a new LumiBot device",
+      "url": "./setup.html",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "prefer_related_applications": false
+}
