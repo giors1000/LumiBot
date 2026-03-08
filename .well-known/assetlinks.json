@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.giors1000.twa",
+      "sha256_cert_fingerprints": [
+        "A3:A5:84:F1:38:79:F5:19:F7:C3:77:E1:D9:C4:67:37:A2:BF:34:47:61:CB:21:57:5F:42:60:32:AE:5C:84:20"
+      ]
+    }
+  }
+]
