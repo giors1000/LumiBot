@@ -1,0 +1,3065 @@
+/**
+ * Zaylo - Index Page Logic
+ * Manages device list, MQTT connections, quick controls, and context menu
+ */
+
+// ============================================
+// MQTT Configuration
+// ============================================
+// MQTT credentials are centralized in MQTTClient.config (mqtt.js)
+
+// ============================================
+// Pull-to-Refresh
+// ============================================
+class PullToRefresh {
+  constructor(container, onRefresh) {
+    this.container = container;
+    this.onRefresh = onRefresh;
+    this.indicator = document.getElementById('ptrIndicator');
+    this.spinner = this.indicator?.querySelector('.ptr-spinner');
+    this.startY = 0;
+    this.currentY = 0;
+    this.pulling = false;
+    this.refreshing = false;
+    this.threshold = 80;
+
+    this._onTouchStart = this._onTouchStart.bind(this);
+    this._onTouchMove = this._onTouchMove.bind(this);
+    this._onTouchEnd = this._onTouchEnd.bind(this);
+
+    container.addEventListener('touchstart', this._onTouchStart, { passive: true });
+    container.addEventListener('touchmove', this._onTouchMove, { passive: false });
+    container.addEventListener('touchend', this._onTouchEnd, { passive: true });
+    this.startX = 0; // Add X tracking
+  }
+
+  _onTouchStart(e) {
+    if (this.refreshing) return;
+    if (this.container.scrollTop > 0) return; // Strict top check
+
+    // CRITICAL: Don't start pull-to-refresh if user is holding a card to drag
+    if (CardReorder && CardReorder.state !== 'IDLE') return;
+
+    this.startY = e.touches[0].clientY;
+    this.startX = e.touches[0].clientX;
+    this.currentY = e.touches[0].clientY; // Reset to prevent phantom triggers
+    this.pulling = true;
+  }
+
+  _onTouchMove(e) {
+    if (!this.pulling || this.refreshing) return;
+
+    // CRITICAL: Abort if drag started during the move
+    if (CardReorder && CardReorder.state !== 'IDLE') {
+      this.pulling = false;
+      this._reset();
+      return;
+    }
+
+    const y = e.touches[0].clientY;
+    const x = e.touches[0].clientX;
+    const diff = y - this.startY;
+    const diffX = Math.abs(x - this.startX);
+
+    // Lock: If scrolling down or moving horizontally more than vertically, ignore
+    if (diffX > Math.abs(diff) || this.container.scrollTop > 0) {
+      this.pulling = false;
+      return;
+    }
+
+    this.currentY = y;
+
+    if (diff > 0 && this.container.scrollTop <= 0) {
+      e.preventDefault();
+      const progress = Math.min(diff / this.threshold, 1);
+      const translateY = Math.min(diff * 0.5, 60);
+
+      if (this.indicator) {
+        this.indicator.classList.add('visible');
+        this.indicator.style.transform = `translateX(-50%) translateY(${translateY}px)`;
+      }
+      if (this.spinner) {
+        this.spinner.style.transform = `rotate(${progress * 360}deg)`;
+      }
+    }
+  }
+
+  _onTouchEnd() {
+    if (!this.pulling || this.refreshing) return;
+    this.pulling = false;
+    const diff = this.currentY - this.startY;
+
+    if (diff > this.threshold) {
+      this._doRefresh();
+    } else {
+      this._reset();
+    }
+  }
+
+  async _doRefresh() {
+    this.refreshing = true;
+    Haptic.medium();
+
+    if (this.indicator) {
+      this.indicator.classList.add('refreshing');
+      this.indicator.style.transform = 'translateX(-50%) translateY(0)';
+    }
+
+    try {
+      await this.onRefresh();
+    } catch (e) {
+      console.error('[PTR] Refresh error:', e);
+    }
+
+    setTimeout(() => {
+      this._reset();
+      this.refreshing = false;
+    }, 600);
+  }
+
+  _reset() {
+    if (this.indicator) {
+      this.indicator.classList.remove('visible', 'refreshing');
+      this.indicator.style.transform = '';
+    }
+    if (this.spinner) {
+      this.spinner.style.transform = '';
+    }
+  }
+}
+
+// ============================================
+// Long Press Detection
+// ============================================
+class LongPressHandler {
+  constructor(element, callback, duration = 500) {
+    this.element = element;
+    this.callback = callback;
+    this.duration = duration;
+    this.timer = null;
+    this.isLongPress = false;
+
+    this.element.addEventListener('touchstart', (e) => this.start(e), { passive: true });
+    this.element.addEventListener('touchend', () => this.cancel());
+    this.element.addEventListener('touchmove', () => this.cancel());
+    this.element.addEventListener('mousedown', (e) => this.start(e));
+    this.element.addEventListener('mouseup', () => this.cancel());
+    this.element.addEventListener('mouseleave', () => this.cancel());
+  }
+
+  start(e) {
+    this.isLongPress = false;
+    this.element.classList.add('long-press-active');
+
+    this.timer = setTimeout(() => {
+      this.isLongPress = true;
+      this.element.classList.remove('long-press-active');
+
+      Haptic.heavy();
+      this.callback(e);
+    }, this.duration);
+  }
+
+  cancel() {
+    this.element.classList.remove('long-press-active');
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  wasLongPress() {
+    return this.isLongPress;
+  }
+}
+
+// ============================================
+// Pending Deletion Tracking
+// Prevents merge logic from re-adding devices during async delete
+// ============================================
+const _pendingDeletions = new Set();
+
+// ============================================
+// Blind Target Tracking
+// Preserves optimistic UI during MQTT state updates
+// ============================================
+const _blindTargetLock = new Map(); // deviceId -> { target: 0|50|100, timestamp: number }
+
+// ============================================
+// Context Menu with Swipe-to-Dismiss
+// ============================================
+const DeviceContextMenu = {
+  currentDeviceId: null,
+  backdrop: null,
+  menu: null,
+  startY: 0,
+  currentY: 0,
+  isDragging: false,
+
+  init() {
+    this.backdrop = document.getElementById('contextMenuBackdrop');
+    this.menu = document.getElementById('contextMenu');
+
+    // NOTE: MQTT listeners (onConnect, onStateUpdate) are registered once in initMQTT()
+    // to prevent duplicate handlers that cause double card updates and redundant subscriptions.
+
+    if (!this.backdrop || !this.menu) return;
+
+    // Close on backdrop click
+    this.backdrop.addEventListener('click', (e) => {
+      if (e.target === this.backdrop) {
+        this.close();
+      }
+    });
+
+    // Cancel button
+    document.getElementById('contextMenuCancel')?.addEventListener('click', () => {
+      this.close();
+    });
+
+    // Option buttons
+    this.menu.querySelectorAll('[data-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        this.handleAction(action);
+      });
+    });
+
+    // Swipe-to-dismiss on handle
+    const handle = this.menu.querySelector('.context-menu-handle');
+    if (handle) {
+      handle.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: true });
+      this.menu.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
+      this.menu.addEventListener('touchend', () => this.onTouchEnd());
+    }
+  },
+
+  onTouchStart(e) {
+    this.startY = e.touches[0].clientY;
+    this.currentY = this.startY;
+    this.isDragging = true;
+    this.menu.style.transition = 'none';
+  },
+
+  onTouchMove(e) {
+    if (!this.isDragging) return;
+
+    this.currentY = e.touches[0].clientY;
+    const diff = this.currentY - this.startY;
+
+    // Only allow dragging down
+    if (diff > 0) {
+      this.menu.style.transform = `translateY(${diff}px)`;
+      // Fade backdrop based on drag distance
+      const opacity = Math.max(0, 1 - diff / 300);
+      this.backdrop.style.backgroundColor = `rgba(0, 0, 0, ${opacity * 0.5})`;
+    }
+  },
+
+  onTouchEnd() {
+    if (!this.isDragging) return;
+    this.isDragging = false;
+
+    this.menu.style.transition = '';
+    this.backdrop.style.transition = '';
+
+    const diff = this.currentY - this.startY;
+
+    // If dragged more than 100px, close
+    if (diff > 100) {
+      this.close();
+    } else {
+      // Snap back
+      this.menu.style.transform = '';
+      this.backdrop.style.backgroundColor = '';
+    }
+  },
+
+  show(deviceId) {
+    this.currentDeviceId = deviceId;
+    const device = DeviceList.get(deviceId);
+    const state = MQTTClient.getDeviceState(deviceId);
+
+    if (!device) return;
+
+    // Update menu content
+    document.getElementById('contextMenuTitle').textContent = device.name || `Zaylo-${deviceId}`;
+    document.getElementById('contextMenuSubtitle').textContent = state?._online ? 'Online' : 'Offline';
+
+    // Reset any drag state
+    this.menu.style.transform = '';
+    this.backdrop.style.backgroundColor = '';
+
+    // Show menu
+    this.backdrop.classList.add('visible');
+
+    Haptic.medium();
+  },
+
+  close() {
+    if (this.backdrop) {
+      this.backdrop.classList.remove('visible');
+      // Reset styles after animation
+      setTimeout(() => {
+        this.menu.style.transform = '';
+        this.backdrop.style.backgroundColor = '';
+      }, 400);
+    }
+    this.currentDeviceId = null;
+  },
+
+  handleAction(action) {
+    const deviceId = this.currentDeviceId;
+    if (!deviceId) return;
+
+    this.close();
+
+    switch (action) {
+      case 'rename':
+        this.showRenameModal(deviceId);
+        break;
+      case 'settings':
+        window.location.href = `device.html?id=${deviceId}`;
+        break;
+      case 'remove':
+        this.showRemoveConfirmation(deviceId);
+        break;
+    }
+  },
+
+  showRenameModal(deviceId) {
+    const device = DeviceList.get(deviceId);
+    if (!device) return;
+
+    Modal.input({
+      title: 'Rename Device',
+      placeholder: 'Enter device name',
+      value: device.name || '',
+      onSubmit: async (rawName) => {
+        // Strict sanitization
+        // Allow alphanumeric, spaces, hyphens, underscores
+        const cleanName = rawName.replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+
+        if (cleanName) {
+
+
+          // 1. Sync to Firebase (Source of Truth)
+          const user = Auth.getUser();
+          const homeId = window.activeHomeId;
+          if (user && homeId) {
+            try {
+              // This triggers onSnapshot immediately (Latency Compensation)
+              await DeviceService.updateDevice(homeId, deviceId, { name: cleanName });
+              console.debug('[Index] Rename command sent to Firebase');
+              Toast.success('Device renamed');
+            } catch (e) {
+              console.error('[Index] Failed to sync rename to Firebase:', e);
+              Toast.error('Failed to save name online');
+            }
+          } else {
+            // Offline: Update local only
+            console.warn('[Index] User not logged in, rename is local only');
+            DeviceList.update(deviceId, { name: cleanName });
+            renderDevices();
+            Toast.success('Device renamed (Local only)');
+          }
+        } else {
+          Toast.error('Invalid name');
+        }
+      }
+    });
+  },
+
+  showRemoveConfirmation(deviceId) {
+    const device = DeviceList.get(deviceId);
+    const deviceName = device?.name || `Device ${deviceId}`;
+
+    Modal.confirm(
+      'Remove Device',
+      `Are you sure you want to remove "${deviceName}"? You can add it back later.`,
+      async () => {
+        try {
+          // Mark as pending deletion so merge logic won't re-add it
+          _pendingDeletions.add(deviceId.toUpperCase().trim());
+
+          const user = Auth.getUser();
+
+          // ============================================
+          // STEP 1: Remove from Firebase (if authenticated)
+          // ============================================
+          if (user) {
+            console.debug('[Index] <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Removing device from Firebase:', deviceId);
+
+            // Wait for DeviceService to be initialized
+            await DeviceService.init();
+            const homeId = window.activeHomeId;
+            const success = await DeviceService.removeDevice(homeId, deviceId);
+
+            if (!success) {
+              console.error('[Index] ❌ Firebase removal failed for device:', deviceId);
+              Toast.error('Failed to remove device from cloud');
+              return; // Don't remove locally if cloud removal fails
+            }
+
+            console.debug('[Index] ✅ Device removed from Firebase successfully');
+            // Note: removeDevice() already verifies deletion internally
+          }
+
+          // ============================================
+          // STEP 2: Remove from local storage
+          // ============================================
+
+          const removed = DeviceList.remove(deviceId);
+
+          if (!removed) {
+            console.warn('[Index] Device was not in local storage:', deviceId);
+          }
+
+          // ============================================
+          // STEP 3: Cleanup MQTT subscription
+          // ============================================
+          if (MQTTClient.unsubscribeDevice) {
+            console.debug('[Index] Unsubscribing from MQTT for device:', deviceId);
+            MQTTClient.unsubscribeDevice(deviceId);
+          }
+
+          // ============================================
+          // STEP 4: Re-render device list (do NOT trigger background sync)
+          // ============================================
+          const list = document.getElementById('deviceList');
+          const emptyState = document.getElementById('emptyState');
+          const countEl = document.getElementById('deviceCount');
+          const currentDevices = DeviceList.getAll();
+          renderDeviceList(currentDevices, list, emptyState, countEl);
+
+          Toast.success('Device removed');
+          // console.log('[Index] ✅ Device removal complete:', deviceId);
+
+        } catch (error) {
+          console.error('[Index] ❌ Failed to remove device:', error);
+          Toast.error('Failed to remove device: ' + (error.message || 'Unknown error'));
+        } finally {
+          // Always clear pending deletion flag
+          _pendingDeletions.delete(deviceId.toUpperCase().trim());
+        }
+      }
+    );
+  }
+};
+
+// ============================================
+// Card Drag-to-Reorder System
+// ============================================
+// ============================================
+// Card Drag-to-Reorder System (Premium Polish)
+// ============================================
+const CardReorder = {
+  // State Machine
+  state: 'IDLE', // IDLE | HOLD_PENDING | HELD | DRAGGING | DROPPING
+  dragCard: null,
+  ghost: null,
+  list: null,
+
+  // Touch Tracking
+  startX: 0,
+  startY: 0,
+  currentY: 0,
+  initialGhostTop: 0,
+  touchOffsetY: 0, // Distance from finger to card top
+
+  // Animation Refs
+  rafId: null,
+  holdTimer: null,
+
+  // Config
+  HOLD_DELAY: 350, // ms - Deliberate long press required
+  DRAG_MOVE_THRESHOLD: 12, // px - Movement needed to start drag from HELD
+  SCROLL_ZONE: 80, // px - Area to trigger auto-scroll
+  SCROLL_SPEED: 8, // px/frame
+  TILT_MAX: 4,     // deg - Maximum tilt during drag
+
+  init() {
+    this.list = document.getElementById('deviceList');
+    if (!this.list) return;
+
+    // Use non-passive listeners to allow preventing scroll
+    this.list.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
+    document.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
+    document.addEventListener('touchend', (e) => this.onTouchEnd(e));
+    document.addEventListener('touchcancel', (e) => this.onTouchEnd(e));
+
+    // Dismiss hold-active state when tapping outside a held card
+    document.addEventListener('touchstart', (e) => {
+      if (this.state !== 'HELD') return;
+      const card = e.target.closest('.device-card[data-device-id]');
+      // If tapping the card-menu-btn, let the click handler deal with it
+      if (e.target.closest('.card-menu-btn')) return;
+      // If tapping outside the held card, dismiss hold state
+      if (!card || card !== this.dragCard) {
+        this.dismissHeld();
+      }
+    }, { passive: true });
+  },
+
+  /** Dismiss the HELD state (card returns to normal) */
+  dismissHeld() {
+    if (this.dragCard) {
+      this.dragCard.classList.remove('hold-active');
+    }
+    this.state = 'IDLE';
+    this.dragCard = null;
+  },
+
+  reset() {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+
+    this.state = 'IDLE';
+    this.dragCard = null;
+    this.ghost = null;
+    this.startX = 0;
+    this.startY = 0;
+    this.lastSwapDir = null;
+
+    // Cleanup any loose classes (safety)
+    document.querySelectorAll('.drag-ghost').forEach(el => el.remove());
+    document.querySelectorAll('.drag-placeholder').forEach(el => {
+      el.classList.remove('drag-placeholder');
+      el.style.opacity = '';
+      el.style.visibility = '';
+    });
+    document.querySelectorAll('.hold-active').forEach(el => el.classList.remove('hold-active'));
+    document.querySelectorAll('.is-moving').forEach(el => el.classList.remove('is-moving'));
+    document.querySelectorAll('.is-reordering').forEach(el => el.classList.remove('is-reordering'));
+  },
+
+  // ── Touch Handlers ────────────────────────────────
+
+  onTouchStart(e) {
+    // If already in HELD state, let the dismiss handler deal with it
+    if (this.state === 'HELD') return;
+    if (this.state !== 'IDLE') return;
+
+    // 1. Target Validation
+    const card = e.target.closest('.device-card[data-device-id]');
+    if (!card) return;
+
+    // 2. Interactive Element Bypass
+    if (e.target.closest('button, .toggle-mini, .power-btn, .mode-btn, [data-mode], .blind-quick-btn')) {
+      return;
+    }
+
+    // 3. Initialize State
+    const touch = e.touches[0];
+    this.dragCard = card;
+    this.startX = touch.clientX;
+    this.startY = touch.clientY;
+    this.state = 'HOLD_PENDING';
+
+    // 4. Capture touch coords as plain numbers (Touch objects get recycled by the browser)
+    const touchX = touch.clientX;
+    const touchY = touch.clientY;
+
+    // 5. Start Hold Timer — transitions to HELD (not directly to DRAGGING)
+    this.holdTimer = setTimeout(() => {
+      if (this.state === 'HOLD_PENDING') {
+        this.state = 'HELD';
+        this.dragCard.classList.add('hold-active');
+        // Store touch position for drag threshold check
+        this.heldTouchX = touchX;
+        this.heldTouchY = touchY;
+        try { Haptic.heavy(); } catch (_) { }
+      }
+    }, this.HOLD_DELAY);
+  },
+
+  onTouchMove(e) {
+    const touch = e.touches[0];
+    const dx = touch.clientX - this.startX;
+    const dy = touch.clientY - this.startY;
+
+    // Case A: Waiting for Hold
+    if (this.state === 'HOLD_PENDING') {
+      // If moved too much before timer fires, cancel hold (it's a scroll)
+      if (Math.abs(dy) > 10 || Math.abs(dx) > 10) {
+        clearTimeout(this.holdTimer);
+        this.state = 'IDLE';
+        if (this.dragCard) this.dragCard.classList.remove('hold-active');
+      }
+      return;
+    }
+
+    // Case B: Held — start drag if moved enough
+    if (this.state === 'HELD') {
+      const moveDx = touch.clientX - (this.heldTouchX || this.startX);
+      const moveDy = touch.clientY - (this.heldTouchY || this.startY);
+      if (Math.abs(moveDy) > this.DRAG_MOVE_THRESHOLD || Math.abs(moveDx) > this.DRAG_MOVE_THRESHOLD) {
+        e.preventDefault();
+        this.startDrag(touch.clientX, touch.clientY);
+      }
+      return;
+    }
+
+    // Case C: Dragging
+    if (this.state === 'DRAGGING') {
+      e.preventDefault(); // Stop native scrolling
+      this.currentY = touch.clientY;
+      this.updateGhost(touch.clientX, touch.clientY);
+      this.checkAutoScroll(touch.clientY);
+    }
+  },
+
+  onTouchEnd(e) {
+    if (this.state === 'HOLD_PENDING') {
+      clearTimeout(this.holdTimer);
+      this.state = 'IDLE';
+      if (this.dragCard) this.dragCard.classList.remove('hold-active');
+    } else if (this.state === 'HELD') {
+      // User long-pressed and released — keep the card in hold-active state
+      // so they can tap the 3-dots menu button. Tapping elsewhere will dismiss.
+      // State stays as HELD, which will be dismissed by the document touchstart handler.
+    } else if (this.state === 'DRAGGING') {
+      this.endDrag();
+    }
+  },
+
+  // ── Drag Logic (Slot-Based Architecture) ────────────────
+  // Instead of doing live DOM swaps during drag (which causes oscillation),
+  // we freeze card positions at drag start, compute the closest slot,
+  // and shift cards visually with CSS transforms. DOM is only reordered on drop.
+
+  startDrag(clientX, clientY) {
+    this.state = 'DRAGGING';
+
+    try { Haptic.heavy(); } catch (_) { }
+
+    // 1. Measurements
+    const rect = this.dragCard.getBoundingClientRect();
+    this.touchOffsetY = clientY - rect.top;
+    this.touchOffsetX = clientX - rect.left;
+    this.ghostWidth = rect.width;
+    this.ghostHeight = rect.height;
+
+    // Position tracking
+    this.currentX = rect.left;
+    this.currentY = rect.top;
+    this.targetX = rect.left;
+    this.targetY = rect.top;
+    this.startX = rect.left;
+
+    // 2. Freeze card positions into immutable slots
+    const allCards = Array.from(this.list.querySelectorAll('.device-card'));
+    this.originalOrder = allCards;
+    this.dragIndex = allCards.indexOf(this.dragCard);
+    this.targetIndex = this.dragIndex;
+
+    this.slots = allCards.map(c => {
+      const r = c.getBoundingClientRect();
+      return { top: r.top, left: r.left, height: r.height, centerY: r.top + r.height / 2 };
+    });
+
+    // Track initial scroll position for adjustment
+    const container = document.querySelector('.app');
+    this.startScrollTop = container ? container.scrollTop : 0;
+
+    // 3. CRITICAL: Strip ALL CSS animations from cards.
+    //    CSS animation fill-mode ('both'/'forwards') overrides inline styles
+    //    in the CSS cascade, so transforms set by applyShifts() would be ignored.
+    allCards.forEach(c => {
+      c.classList.remove('card-enter');
+      c.style.animation = 'none';
+      c.style.webkitAnimation = 'none';
+    });
+
+    // 4. Create Ghost
+    this.ghost = this.dragCard.cloneNode(true);
+    this.ghost.classList.add('drag-ghost');
+    this.ghost.classList.remove('hold-active');
+    this.ghost.style.width = `${rect.width}px`;
+    this.ghost.style.height = `${rect.height}px`;
+    this.ghost.style.left = `${rect.left}px`;
+    this.ghost.style.top = `${rect.top}px`;
+    document.body.appendChild(this.ghost);
+
+    // 5. Placeholder keeps space in layout
+    this.dragCard.classList.add('drag-placeholder');
+    this.list.classList.add('is-reordering');
+
+    // 6. Start loop
+    this.rafId = requestAnimationFrame(() => this.dragLoop());
+  },
+
+  dragLoop() {
+    if (this.state !== 'DRAGGING') return;
+
+    // 1. Direct Tracking
+    this.currentX = this.targetX;
+    this.currentY = this.targetY;
+
+    // 2. Render Ghost
+    const dx = this.currentX - this.startX;
+    const tilt = Math.max(Math.min(dx * 0.1, 5), -5);
+
+    this.ghost.style.transform = `translate3d(0, 0, 0) rotate(${tilt}deg) scale(1.05)`;
+    this.ghost.style.top = `${this.currentY}px`;
+    this.ghost.style.left = `${this.currentX}px`;
+
+    // 3. Update which slot we're closest to
+    this.updateSort();
+
+    this.rafId = requestAnimationFrame(() => this.dragLoop());
+  },
+
+  updateGhost(clientX, clientY) {
+    if (!this.ghost) return;
+    this.targetY = clientY - this.touchOffsetY;
+    this.targetX = clientX - this.touchOffsetX;
+  },
+
+  // ── Slot-Based Sort ─────────────────────────────────
+  // Directional threshold: swap triggers when ghost has moved 30% toward the
+  // next slot, making cards shift earlier and feel more responsive.
+  updateSort() {
+    if (!this.ghost || !this.slots || !this.slots.length) return;
+
+    // Account for scroll changes since drag start
+    const container = document.querySelector('.app');
+    const scrollDelta = container ? (container.scrollTop - this.startScrollTop) : 0;
+
+    // Ghost center in viewport coordinates
+    const ghostCenterY = this.currentY + (this.ghostHeight / 2);
+
+    // Current target index — check if we should move to a neighbor
+    let newTarget = this.targetIndex;
+
+    // How far is 30% toward the next slot?
+    const THRESHOLD = 0.30;
+
+    // Check if should move DOWN
+    if (newTarget < this.slots.length - 1) {
+      const currentCenter = this.slots[newTarget].centerY - scrollDelta;
+      const nextCenter = this.slots[newTarget + 1].centerY - scrollDelta;
+      const triggerDown = currentCenter + (nextCenter - currentCenter) * THRESHOLD;
+      if (ghostCenterY > triggerDown) {
+        newTarget = newTarget + 1;
+      }
+    }
+
+    // Check if should move UP (only if we didn't already move down)
+    if (newTarget === this.targetIndex && newTarget > 0) {
+      const currentCenter = this.slots[newTarget].centerY - scrollDelta;
+      const prevCenter = this.slots[newTarget - 1].centerY - scrollDelta;
+      const triggerUp = currentCenter - (currentCenter - prevCenter) * THRESHOLD;
+      if (ghostCenterY < triggerUp) {
+        newTarget = newTarget - 1;
+      }
+    }
+
+    // No change? Skip.
+    if (newTarget === this.targetIndex) return;
+
+    this.targetIndex = newTarget;
+
+    // Visually shift other cards to make room (transforms only, no DOM changes)
+    this.applyShifts();
+
+    try { Haptic.selection(); } catch (_) { }
+  },
+
+  // Apply CSS transforms to shift non-dragged cards to their temporary positions.
+  // Uses !important to beat any CSS animation fill or pseudo-class overrides.
+  applyShifts() {
+    this.originalOrder.forEach((card, originalIdx) => {
+      if (card === this.dragCard) return;
+
+      // Compute this card's visual slot in the target arrangement
+      let newSlotIdx = originalIdx;
+
+      if (this.targetIndex > this.dragIndex) {
+        // Dragging DOWN: cards between (dragIndex, targetIndex] shift UP by 1 slot
+        if (originalIdx > this.dragIndex && originalIdx <= this.targetIndex) {
+          newSlotIdx = originalIdx - 1;
+        }
+      } else if (this.targetIndex < this.dragIndex) {
+        // Dragging UP: cards between [targetIndex, dragIndex) shift DOWN by 1 slot
+        if (originalIdx >= this.targetIndex && originalIdx < this.dragIndex) {
+          newSlotIdx = originalIdx + 1;
+        }
+      }
+
+      // Compute pixel shift from original slot to target slot
+      const shiftY = this.slots[newSlotIdx].top - this.slots[originalIdx].top;
+
+      // Use setProperty with !important to guarantee override of any CSS
+      // (animation fills, :hover, :active pseudo-classes, etc.)
+      if (Math.abs(shiftY) > 0.5) {
+        card.style.setProperty('transform', `translateY(${shiftY}px)`, 'important');
+      } else {
+        card.style.setProperty('transform', '', '');
+      }
+    });
+  },
+
+  checkAutoScroll(y) {
+    const container = document.querySelector('.app');
+    if (!container) return;
+
+    const bottomZone = window.innerHeight - this.SCROLL_ZONE;
+
+    if (y < this.SCROLL_ZONE && container.scrollTop > 0) {
+      container.scrollBy(0, -this.SCROLL_SPEED);
+    } else if (y > bottomZone && container.scrollTop < container.scrollHeight - container.clientHeight - 5) {
+      container.scrollBy(0, this.SCROLL_SPEED);
+    }
+  },
+
+  // ── End Drag ──────────────────────────────────────
+
+  endDrag() {
+    this.state = 'DROPPING';
+    cancelAnimationFrame(this.rafId);
+
+    // 1. Compute destination from frozen slot data
+    const container = document.querySelector('.app');
+    const scrollDelta = container ? (container.scrollTop - this.startScrollTop) : 0;
+    const destTop = this.slots[this.targetIndex].top - scrollDelta;
+    const destLeft = this.slots[this.targetIndex].left;
+
+    // 2. Kill the ghostPop animation so it doesn't interfere with drop transition
+    this.ghost.style.animation = 'none';
+
+    // 3. Animate Ghost to target slot
+    const ghost = this.ghost;
+    const landingCard = this.dragCard;
+    const list = this.list;
+    const origOrder = this.originalOrder;
+    const dragIdx = this.dragIndex;
+    const targetIdx = this.targetIndex;
+
+    requestAnimationFrame(() => {
+      ghost.style.transition = [
+        'top 0.35s cubic-bezier(0.22, 1, 0.36, 1)',
+        'left 0.35s cubic-bezier(0.22, 1, 0.36, 1)',
+        'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+        'box-shadow 0.3s ease-out',
+        'opacity 0.25s ease-out'
+      ].join(', ');
+      ghost.style.top = `${destTop}px`;
+      ghost.style.left = `${destLeft}px`;
+      ghost.style.transform = 'scale(1) rotate(0deg)';
+      ghost.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)';
+      ghost.style.opacity = '0.95';
+    });
+
+    try { Haptic.medium(); } catch (_) { }
+
+    // 4. Cleanup after ghost transition ends
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+
+      // Remove ghost
+      if (ghost?.parentNode) ghost.remove();
+
+      // Clear all visual transforms first
+      origOrder.forEach(card => {
+        card.style.transition = '';
+        card.style.removeProperty('transform');
+        card.style.removeProperty('animation');
+        card.style.removeProperty('-webkit-animation');
+      });
+
+      // Do the actual DOM reorder (single atomic operation)
+      if (targetIdx !== dragIdx && list) {
+        const withoutDrag = origOrder.filter(c => c !== landingCard);
+        withoutDrag.splice(targetIdx, 0, landingCard);
+
+        // Preserve any non-device-card children (e.g. add-card)
+        const addCard = list.querySelector('.add-card');
+        withoutDrag.forEach(c => list.appendChild(c));
+        if (addCard) list.appendChild(addCard);
+      }
+
+      // Restore the landed card
+      if (landingCard) {
+        landingCard.classList.remove('drag-placeholder', 'hold-active');
+        landingCard.style.opacity = '';
+        landingCard.style.visibility = '';
+        // Settle bounce animation
+        landingCard.classList.add('drag-dropped');
+        const onEnd = () => landingCard.classList.remove('drag-dropped');
+        landingCard.addEventListener('animationend', onEnd, { once: true });
+        setTimeout(onEnd, 500);
+      }
+
+      if (list) list.classList.remove('is-reordering');
+      this.state = 'IDLE';
+      this.dragCard = null;
+      this.ghost = null;
+      this.originalOrder = [];
+      this.slots = [];
+      this.saveOrder();
+    };
+
+    ghost.addEventListener('transitionend', cleanup, { once: true });
+
+    // Fail-safe timeout (must exceed longest transition: 350ms + rAF)
+    setTimeout(() => {
+      if (this.state === 'DROPPING') cleanup();
+    }, 500);
+  },
+
+  // ── Persistence ───────────────────────────────────
+
+  async saveOrder() {
+    const order = Array.from(this.list.querySelectorAll('.device-card[data-device-id]'))
+      .map(el => el.dataset.deviceid || el.dataset.deviceId); // Handle potential casing
+
+    // CRITICAL: Update in-memory state to prevent revert on re-render
+    this.savedOrder = order;
+
+    // Save locally immediately
+    localStorage.setItem('zaylo-deviceOrder', JSON.stringify(order));
+
+    // Sync to cloud
+    const user = Auth.getUser();
+    if (user && window.DeviceService) {
+      try {
+        await DeviceService.saveDeviceOrder(user.uid, order);
+      } catch (e) {
+        console.error('Failed to save order', e);
+      }
+    }
+  },
+
+  async loadOrder() {
+    try {
+      const local = JSON.parse(localStorage.getItem('zaylo-deviceOrder') || '[]');
+      if (local.length) this.savedOrder = local;
+    } catch (e) { }
+    const user = Auth.getUser();
+    if (user && window.DeviceService) {
+      try {
+        const fb = await DeviceService.getDeviceOrder(user.uid);
+        if (fb?.length) {
+          this.savedOrder = fb;
+          localStorage.setItem('zaylo-deviceOrder', JSON.stringify(fb));
+        }
+      } catch (e) { }
+    }
+    return this.savedOrder;
+  },
+
+  applyOrder(devices) {
+    if (!this.savedOrder?.length) return devices;
+    const m = new Map(this.savedOrder.map((id, i) => [id, i]));
+    return [...devices].sort((a, b) => (m.get(a.id) ?? 9999) - (m.get(b.id) ?? 9999));
+  }
+};
+
+// ============================================
+// Device Card Template
+// ============================================
+function createDeviceCard(device, state = null, index = 0) {
+  // Handle three states: true (online), false (offline), undefined (unknown/connecting)
+  const onlineStatus = state?._online;
+  const isOnline = onlineStatus === true;
+  const isConnecting = onlineStatus === undefined;
+  const lightOn = state?.light ?? false;
+  const mode = state?.mode ?? 0;
+  const alarmEnabled = state?.config?.alarmEnabled ?? false;
+  const alarmHour = state?.config?.alarmHour ?? 7;
+  const alarmMin = state?.config?.alarmMin ?? 0;
+
+  // Mode values MUST match firmware: 0=AUTO, 1=MANUAL, 4=LOCKED, 3=BEDTIME(Sleep)
+  const modes = [
+    { value: 0, icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>', label: 'Auto' },
+    { value: 1, icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>', label: 'Manual' },
+    { value: 4, icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>', label: 'Lock' },
+    { value: 3, icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>', label: 'Sleep' }
+  ];
+
+  // Status text: show Connecting... during initial load, then Online/Offline
+  const statusText = isConnecting ? 'Connecting...' : (isOnline ? 'Online' : 'Offline');
+
+  // CRITICAL: Only animate entry on the VERY FIRST render.
+  // Subsequent re-renders (even if new DOM elements) should appear instantly.
+  const animClass = window.Zaylo_InitialRenderComplete ? '' : 'card-enter';
+
+  const card = document.createElement('div');
+  card.className = `device-card ${animClass} ${isOnline ? 'online' : ''}`;
+  card.id = `device-${device.id}`;
+  card.dataset.deviceId = device.id;
+  card.setAttribute('role', 'listitem');
+  card.style.animationDelay = `${index * 0.08}s`;
+  if (animClass) {
+    card.addEventListener('animationend', () => card.classList.remove('card-enter'), { once: true });
+  }
+
+  card.innerHTML = `
+        <button class="card-menu-btn" data-action="menu" aria-label="Device options"></button>
+        <div class="device-header">
+            <div class="device-info" data-action="navigate">
+                <div class="device-icon ${lightOn ? 'on' : ''}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lightbulb"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
+                    <div class="status-dot ${isOnline ? 'online' : (isConnecting ? 'connecting' : '')}"></div>
+                </div>
+                <div class="device-details">
+                    <div class="device-name">${Utils.escapeHtml(device.name || 'Zaylo-' + device.id)}</div>
+                    <div class="device-status">${statusText} • ${lightOn ? 'On' : 'Off'}</div>
+                </div>
+            </div>
+            <button class="power-btn ${lightOn ? 'active' : ''}" data-action="power">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                    <path d="M12 3v9"/>
+                    <path d="M18.36 6.64A9 9 0 1 1 5.64 6.64"/>
+                </svg>
+            </button>
+        </div>
+        
+        <div class="mode-row">
+            ${modes.map(m => `
+                <button class="mode-btn ${mode === m.value ? 'active' : ''}" data-mode="${m.value}">
+                    <span class="mode-icon">${m.icon}</span>
+                    <span class="mode-label">${m.label}</span>
+                </button>
+            `).join('')}
+        </div>
+        
+        <div class="quick-row">
+            <div class="quick-info">
+                <span class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/><path d="M6.38 18.7 4 21"/><path d="M17.64 18.67 20 21"/></svg></span>
+                <div class="quick-text">
+                    <span class="quick-label">Alarm</span>
+                    <span class="quick-value">${String(alarmHour).padStart(2, '0')}:${String(alarmMin).padStart(2, '0')}</span>
+                </div>
+            </div>
+            <div class="toggle-mini ${alarmEnabled ? 'active' : ''}" data-action="alarm">
+                <div class="thumb"></div>
+            </div>
+        </div>
+    `;
+
+  return card;
+}
+
+// ============================================
+// Blind Device Card Template
+// ============================================
+
+// Helper: edge-round position to fix firmware rounding (e.g. 99→100, 1→0)
+function _roundBlindPosition(pos) {
+  if (pos >= 98) return 100;
+  if (pos <= 2) return 0;
+  return pos;
+}
+
+// Helper: get badge class for a position value
+function _badgeClass(pos) {
+  if (pos === 0) return 'closed';
+  if (pos === 100) return 'open';
+  return 'half';
+}
+
+// Helper: get badge label text
+function _badgeLabel(pos) {
+  if (pos === 0) return 'Closed';
+  if (pos === 100) return 'Open';
+  if (pos === 50) return 'Half';
+  return `${pos}%`;
+}
+
+// Helper: get position text for status line
+function _posText(pos) {
+  if (pos === 0) return 'Closed';
+  if (pos === 100) return 'Open';
+  return `${pos}%`;
+}
+
+// Automation definitions for the carousel
+const BLIND_AUTOMATIONS = [
+  { key: 'sunset',      label: 'Sunset Close',    icon: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10V2"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m16 6-4 4-4-4"/><path d="M16 18a4 4 0 0 0-8 0"/></svg>' },
+  { key: 'morningOpen', label: 'Morning Open',     icon: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m8 6 4-4 4 4"/><path d="M16 18a4 4 0 0 0-8 0"/></svg>' },
+  { key: 'nightLock',   label: 'Night Lock',       icon: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>' },
+  { key: 'presence',    label: 'Presence',          icon: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' },
+  { key: 'temperature', label: 'Heat Protection',   icon: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>' }
+];
+
+function createBlindDeviceCard(device, state = null, index = 0) {
+  const onlineStatus = state?._online;
+  const isOnline = onlineStatus === true;
+  const isConnecting = onlineStatus === undefined;
+  const rawPosition = state?.blindPosition ?? state?.position ?? 0;
+  const position = _roundBlindPosition(rawPosition);
+  const isOpen = position > 0;
+
+  const statusText = isConnecting ? 'Connecting...' : (isOnline ? 'Online' : 'Offline');
+  const posText = _posText(position);
+
+  // Read blind type and rules from saved state
+  let blindTypeLabel = 'Roller';
+  let savedRules = { sunset: true, morningOpen: true, nightLock: false, presence: true, temperature: false };
+  try {
+    const saved = JSON.parse(localStorage.getItem(`blind-state-${device.id}`) || '{}');
+    const typeLabels = { roller: 'Roller', venetian: 'Venetian', vertical: 'Vertical', zebra: 'Zebra' };
+    blindTypeLabel = typeLabels[saved.blindType] || 'Roller';
+    if (saved.rules) {
+      Object.assign(savedRules, saved.rules);
+    }
+  } catch (e) { /* ignore */ }
+
+  // CRITICAL: Only animate entry on the VERY FIRST render.
+  const animClass = window.Zaylo_InitialRenderComplete ? '' : 'card-enter';
+
+  const card = document.createElement('div');
+  card.className = `device-card blind-card ${animClass} ${isOnline ? 'online' : ''}`;
+  card.id = `device-${device.id}`;
+  card.dataset.deviceId = device.id;
+  card.dataset.deviceType = device.type === 'stepper' ? 'stepper' : 'blind';
+  card.setAttribute('role', 'listitem');
+  card.style.animationDelay = `${index * 0.08}s`;
+  if (animClass) {
+    card.addEventListener('animationend', () => card.classList.remove('card-enter'), { once: true });
+  }
+
+  // Build automation carousel slides
+  const slidesHtml = BLIND_AUTOMATIONS.map(auto => {
+    const isActive = savedRules[auto.key] === true;
+    return `
+      <div class="blind-auto-slide">
+        <div class="quick-row blind-smart-row">
+          <div class="quick-info">
+            <span class="quick-icon">${auto.icon}</span>
+            <div class="quick-text">
+              <span class="quick-label">${auto.label}</span>
+              <span class="quick-value blind-auto-status-${auto.key}">${isActive ? 'Active' : 'Off'}</span>
+            </div>
+          </div>
+          <div class="toggle-mini ${isActive ? 'active' : ''}" data-action="blindAutoRule" data-rule="${auto.key}">
+            <div class="thumb"></div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const dotsHtml = BLIND_AUTOMATIONS.map((_, i) =>
+    `<span class="blind-auto-dot ${i === 0 ? 'active' : ''}" data-slide="${i}"></span>`
+  ).join('');
+
+  // Determine active quick button
+  const isHalf = position > 0 && position < 100;
+
+  card.innerHTML = `
+        <button class="card-menu-btn" data-action="menu" aria-label="Device options"></button>
+        <div class="device-header">
+            <div class="device-info" data-action="navigate">
+                <div class="device-icon blind-icon ${isOpen ? 'on' : ''}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-blinds"><path d="M3 3h18"/><path d="M20 7H8"/><path d="M20 11H8"/><path d="M10 19h10"/><path d="M8 15h12"/><path d="M4 3v14"/><circle cx="4" cy="19" r="2"/></svg>
+                    <div class="status-dot ${isOnline ? 'online' : (isConnecting ? 'connecting' : '')}"></div>
+                </div>
+                <div class="device-details">
+                    <div class="device-name">${Utils.escapeHtml(device.name || 'Blinds-' + device.id)}</div>
+                    <div class="device-status">${statusText} • ${posText} • ${blindTypeLabel}</div>
+                </div>
+            </div>
+            <div class="blind-position-badge ${_badgeClass(position)}">
+                ${_badgeLabel(position)}
+            </div>
+        </div>
+        
+        <div class="blind-quick-row">
+            <button class="blind-quick-btn ${position === 0 ? 'active' : ''}" data-action="blindClose">
+                <span class="blind-quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></span>
+                <span class="blind-quick-label">Close</span>
+            </button>
+            <button class="blind-quick-btn ${isHalf ? 'active' : ''}" data-action="blindHalf">
+                <span class="blind-quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor"/></svg></span>
+                <span class="blind-quick-label">Half</span>
+            </button>
+            <button class="blind-quick-btn ${position === 100 ? 'active' : ''}" data-action="blindOpen">
+                <span class="blind-quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></span>
+                <span class="blind-quick-label">Open</span>
+            </button>
+        </div>
+
+        <div class="blind-auto-carousel" data-current-slide="0">
+            <div class="blind-auto-track">
+                ${slidesHtml}
+            </div>
+            <div class="blind-auto-dots">
+                ${dotsHtml}
+            </div>
+        </div>
+    `;
+
+  // Setup carousel swipe after card is rendered
+  requestAnimationFrame(() => _initBlindCarousel(card));
+
+  return card;
+}
+
+// ============================================
+// Update Blind Device Card
+// ============================================
+function updateBlindDeviceCard(deviceId, state) {
+  const card = document.getElementById(`device-${deviceId}`);
+  if (!card || !card.classList.contains('blind-card')) return;
+
+  const onlineStatus = state?._online;
+  const isOnline = onlineStatus === true;
+  const isConnecting = onlineStatus === undefined;
+  const rawPosition = state?.blindPosition ?? state?.position ?? 0;
+  const position = _roundBlindPosition(rawPosition);
+  const isOpen = position > 0;
+
+  const statusText = isConnecting ? 'Connecting...' : (isOnline ? 'Online' : 'Offline');
+  const posText = _posText(position);
+
+  // Retrieve blind type label for status text
+  let blindTypeLabel = 'Roller';
+  try {
+    const saved = JSON.parse(localStorage.getItem(`blind-state-${deviceId}`) || '{}');
+    const typeLabels = { roller: 'Roller', venetian: 'Venetian', vertical: 'Vertical', zebra: 'Zebra' };
+    blindTypeLabel = typeLabels[saved.blindType] || 'Roller';
+  } catch (e) { /* ignore */ }
+
+  card.classList.toggle('online', isOnline);
+
+  const icon = card.querySelector('.device-icon');
+  if (icon) icon.classList.toggle('on', isOpen);
+
+  const dot = card.querySelector('.status-dot');
+  if (dot) {
+    dot.classList.remove('online', 'connecting');
+    if (isOnline) dot.classList.add('online');
+    else if (isConnecting) dot.classList.add('connecting');
+  }
+
+  const status = card.querySelector('.device-status');
+  if (status) status.textContent = `${statusText} • ${posText} • ${blindTypeLabel}`;
+
+  const badge = card.querySelector('.blind-position-badge');
+  if (badge) {
+    badge.textContent = _badgeLabel(position);
+    badge.classList.remove('open', 'closed', 'half');
+    badge.classList.add(_badgeClass(position));
+  }
+
+  // Update quick button active states
+  const isHalf = position > 0 && position < 100;
+  
+  // Apply target lock check — if user just tapped a button, don't overwrite it while moving
+  const lock = _blindTargetLock.get(deviceId);
+  if (lock) {
+    const elapsed = Date.now() - lock.timestamp;
+    if (position === lock.target || elapsed > 30000) {
+      // Target reached or lock expired — clear it and let normal update proceed
+      _blindTargetLock.delete(deviceId);
+    } else {
+      // Still moving toward target — skip button/badge updates to preserve optimistic UI
+      return; 
+    }
+  }
+
+  const btns = card.querySelectorAll('.blind-quick-btn');
+  btns.forEach(btn => {
+    const action = btn.dataset.action;
+    if (action === 'blindClose') btn.classList.toggle('active', position === 0);
+    else if (action === 'blindHalf') btn.classList.toggle('active', isHalf);
+    else if (action === 'blindOpen') btn.classList.toggle('active', position === 100);
+  });
+
+  // Update automation toggle states from localStorage
+  try {
+    const saved = JSON.parse(localStorage.getItem(`blind-state-${deviceId}`) || '{}');
+    if (saved.rules) {
+      BLIND_AUTOMATIONS.forEach(auto => {
+        const isActive = saved.rules[auto.key] === true;
+        const toggle = card.querySelector(`[data-rule="${auto.key}"]`);
+        if (toggle) toggle.classList.toggle('active', isActive);
+        const statusEl = card.querySelector(`.blind-auto-status-${auto.key}`);
+        if (statusEl) statusEl.textContent = isActive ? 'Active' : 'Off';
+      });
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// ============================================
+// Blind Automation Carousel — Swipe Handler
+// ============================================
+function _initBlindCarousel(card) {
+  const carousel = card.querySelector('.blind-auto-carousel');
+  if (!carousel) return;
+
+  const track = carousel.querySelector('.blind-auto-track');
+  const dots = carousel.querySelectorAll('.blind-auto-dot');
+  const slideCount = carousel.querySelectorAll('.blind-auto-slide').length;
+  if (!track || slideCount === 0) return;
+
+  let currentSlide = 0;
+  let startX = 0;
+  let startY = 0;
+  let isDragging = false;
+  let currentTranslate = 0;
+  let startTranslate = 0;
+  let isHorizontalSwipe = null;
+
+  function goToSlide(idx) {
+    currentSlide = Math.max(0, Math.min(idx, slideCount - 1));
+    currentTranslate = -currentSlide * 100;
+    track.classList.remove('dragging');
+    track.style.transform = `translateX(${currentTranslate}%)`;
+    carousel.dataset.currentSlide = currentSlide;
+    dots.forEach((d, i) => d.classList.toggle('active', i === currentSlide));
+  }
+
+  // Dot click navigation
+  dots.forEach((dot, i) => {
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      goToSlide(i);
+      if (typeof Haptic !== 'undefined') Haptic.light();
+    });
+  });
+
+  // Touch swipe
+  carousel.addEventListener('touchstart', (e) => {
+    // Don't start swipe on toggle buttons
+    if (e.target.closest('.toggle-mini')) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    isDragging = true;
+    isHorizontalSwipe = null;
+    startTranslate = currentTranslate;
+    track.classList.add('dragging');
+  }, { passive: true });
+
+  carousel.addEventListener('touchmove', (e) => {
+    if (!isDragging) return;
+    const x = e.touches[0].clientX;
+    const y = e.touches[0].clientY;
+    const dx = x - startX;
+    const dy = y - startY;
+
+    // Determine swipe direction lock on first significant movement
+    if (isHorizontalSwipe === null && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+      isHorizontalSwipe = Math.abs(dx) > Math.abs(dy);
+    }
+
+    // Only handle horizontal swipes
+    if (!isHorizontalSwipe) {
+      isDragging = false;
+      track.classList.remove('dragging');
+      return;
+    }
+
+    e.preventDefault();
+    const pctDelta = (dx / carousel.offsetWidth) * 100;
+    let newTranslate = startTranslate + pctDelta;
+    // Add resistance at edges
+    if (newTranslate > 0) newTranslate *= 0.3;
+    if (newTranslate < -(slideCount - 1) * 100) {
+      const overscroll = newTranslate + (slideCount - 1) * 100;
+      newTranslate = -(slideCount - 1) * 100 + overscroll * 0.3;
+    }
+    track.style.transform = `translateX(${newTranslate}%)`;
+  }, { passive: false });
+
+  carousel.addEventListener('touchend', (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+
+    if (isHorizontalSwipe) {
+      const dx = e.changedTouches[0].clientX - startX;
+      const threshold = carousel.offsetWidth * 0.2;
+
+      if (dx < -threshold && currentSlide < slideCount - 1) {
+        goToSlide(currentSlide + 1);
+        if (typeof Haptic !== 'undefined') Haptic.light();
+      } else if (dx > threshold && currentSlide > 0) {
+        goToSlide(currentSlide - 1);
+        if (typeof Haptic !== 'undefined') Haptic.light();
+      } else {
+        goToSlide(currentSlide); // Snap back
+      }
+    } else {
+      track.classList.remove('dragging');
+    }
+  }, { passive: true });
+}
+
+// ============================================
+// Add Device Card
+// ============================================
+function createAddDeviceCard() {
+  const card = document.createElement('div');
+  card.className = 'add-card';
+  card.id = 'addCard';
+  card.innerHTML = `
+    <div class="add-icon">+</div>
+    <div class="add-title">Add Device</div>
+    <div class="add-subtitle">Zaylo Lumibot or Zaylo Slide</div>
+  `;
+  card.addEventListener('click', showAddDeviceModal);
+  return card;
+}
+
+// ============================================
+// Render Devices - Fast local load with background Firebase sync
+// ============================================
+async function renderDevices() {
+  const list = document.getElementById('deviceList');
+  const emptyState = document.getElementById('emptyState');
+  const countEl = document.getElementById('deviceCount');
+
+  // Load saved order (local first, then Firebase override)
+  await CardReorder.loadOrder();
+
+  // FAST PATH: Render from local storage immediately (no await)
+  let localDevices = DeviceList.getAll();
+
+  // Apply saved order
+  localDevices = CardReorder.applyOrder(localDevices);
+
+  // Show skeleton loader if no local devices found (waiting for Firebase)
+  // This prevents flash of "No devices" empty state on first load
+  if (localDevices.length === 0) {
+    if (!list.querySelector('.error-card')) {
+      renderSkeletonLoader(list);
+    }
+  } else {
+    renderDeviceList(localDevices, list, emptyState, countEl);
+  }
+
+  // BACKGROUND: Sync with Firebase (Real-time)
+  setupFirebaseSubscription(list, emptyState, countEl);
+
+  // Mark initial render as complete so future updates don't trigger entry animations
+  // Use a slight timeout to allow the initial animation to start
+  setTimeout(() => {
+    window.Zaylo_InitialRenderComplete = true;
+  }, 1000);
+}
+
+// ============================================
+// No Connection Exception Card
+// ============================================
+function renderNoConnectionCard(list) {
+  list.innerHTML = '';
+  const style = document.createElement('style');
+  style.textContent = '.device-card { touch-action: none !important; }';
+  document.head.appendChild(style);
+
+  const card = document.createElement('div');
+  card.className = 'device-card error-card';
+  card.style.animationDelay = '0s';
+  card.style.pointerEvents = 'none'; // Prevent interaction
+  card.innerHTML = `
+    <div class="device-header" style="justify-content: center; text-align: center; flex-direction: column; gap: 16px; padding: 20px 0;">
+        <div class="device-icon" style="background: rgba(239, 68, 68, 0.1); border: 2px solid rgba(239, 68, 68, 0.2); width: 64px; height: 64px; font-size: 32px; margin: 0 auto; box-shadow: 0 4px 20px rgba(239,68,68,0.15);">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+            <div class="status-dot" style="background: var(--danger); box-shadow: 0 0 10px rgba(239,68,68,0.5);"></div>
+        </div>
+        <div class="device-details" style="width: 100%;">
+            <div class="device-name" style="font-size: 18px; color: var(--danger);">No MQTT Connection</div>
+            <div class="device-status" style="white-space: normal; margin-top: 8px;">Network or broker error. Retrying...</div>
+        </div>
+    </div>
+  `;
+  list.appendChild(card);
+}
+
+// Skeleton Loader - Premium shimmer effect
+function renderSkeletonLoader(list) {
+  list.innerHTML = '';
+  // touch-action override for reliable drag handling
+  const style = document.createElement('style');
+  style.textContent = '.device-card { touch-action: none !important; }';
+  document.head.appendChild(style);
+  for (let i = 0; i < 2; i++) {
+    const skeleton = document.createElement('div');
+    skeleton.className = 'device-card';
+    skeleton.style.animationDelay = `${i * 0.08}s`;
+    skeleton.style.pointerEvents = 'none';
+    skeleton.innerHTML = `
+      <div class="device-header">
+        <div class="device-info">
+          <div class="device-icon" style="background: linear-gradient(135deg, var(--bg-glass-strong) 0%, var(--bg-tertiary) 100%); border: none; animation: shimmer 2s ease-in-out infinite; background-size: 200% 100%;"></div>
+          <div class="device-details">
+            <div style="width: 110px; height: 16px; background: linear-gradient(90deg, var(--bg-glass-strong) 25%, rgba(255,255,255,0.06) 50%, var(--bg-glass-strong) 75%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite; border-radius: 6px; margin-bottom: 8px;"></div>
+            <div style="width: 70px; height: 12px; background: linear-gradient(90deg, var(--bg-glass-strong) 25%, rgba(255,255,255,0.06) 50%, var(--bg-glass-strong) 75%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite 0.1s; border-radius: 5px;"></div>
+          </div>
+        </div>
+        <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, var(--bg-glass-strong) 0%, var(--bg-tertiary) 100%); animation: shimmer 2s ease-in-out infinite 0.2s; background-size: 200% 100%;"></div>
+      </div>
+      <div class="mode-row">
+        ${[0, 1, 2, 3].map(j => `
+        <div style="height: 56px; background: linear-gradient(90deg, var(--bg-glass-strong) 25%, rgba(255,255,255,0.04) 50%, var(--bg-glass-strong) 75%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite ${j * 0.08}s; border-radius: 12px;"></div>
+        `).join('')}
+      </div>
+      <div style="height: 48px; background: linear-gradient(90deg, var(--bg-glass-strong) 25%, rgba(255,255,255,0.04) 50%, var(--bg-glass-strong) 75%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite 0.3s; border-radius: 12px;"></div>
+    `;
+    list.appendChild(skeleton);
+  }
+
+  const addCard = createAddDeviceCard();
+  addCard.style.animationDelay = `${2 * 0.08}s`;
+  list.appendChild(addCard);
+}
+
+// Helper function to render device list without blocking - Smart Updates
+function renderDeviceList(devices, list, emptyState, countEl) {
+  // Always hide empty state - we always show add card now
+  if (emptyState) emptyState.classList.add('hidden');
+
+  // Remove any skeleton loader cards (no data-device-id) before rendering real devices
+  list.querySelectorAll('.device-card:not([data-device-id])').forEach(card => card.remove());
+
+  // Map existing cards by ID for quick lookup
+  const existingCards = new Map();
+  list.querySelectorAll('.device-card[data-device-id]').forEach(card => {
+    // CRITICAL: Normalize ID (string + trim) to match device data exactly
+    const navId = String(card.dataset.deviceId).trim();
+    if (navId) existingCards.set(navId, card);
+  });
+
+  // Preserve the Add Card if it exists, or create it later
+  let addCard = list.querySelector('.add-card');
+  if (addCard) {
+    // Detach it temporarily so we can append it at the end
+    addCard.remove();
+  } else {
+    addCard = createAddDeviceCard();
+  }
+
+  // Iterate through the new list of devices
+  // NOTE: MQTT subscriptions are handled centrally in initMQTT() onConnect handler
+  devices.forEach((device, index) => {
+    const deviceIdStr = String(device.id).trim();
+
+    let card = existingCards.get(deviceIdStr);
+    const state = (typeof MQTTClient !== 'undefined' && MQTTClient.getDeviceState)
+      ? MQTTClient.getDeviceState(device.id)
+      : null;
+
+    if (card) {
+      // CASE 1: UPDATE EXISTING — no re-animation, just update data
+      existingCards.delete(deviceIdStr); // Mark as processed
+
+      // Check if device type changed — if so, rebuild the card entirely
+      const deviceType = device.type || 'lumibot';
+      const cardIsBlind = card.classList.contains('blind-card');
+      const shouldBeBlind = deviceType === 'blind' || deviceType === 'stepper';
+
+      if (cardIsBlind !== shouldBeBlind) {
+        // Type mismatch — remove old card and create the correct one
+        card.remove();
+        card = shouldBeBlind
+          ? createBlindDeviceCard(device, state, index)
+          : createDeviceCard(device, state, index);
+        list.appendChild(card);
+      } else {
+        // Same type — update in place
+        const defaultName = shouldBeBlind ? 'Blinds-' : 'Zaylo-';
+        const nameEl = card.querySelector('.device-name');
+        const newName = device.name || defaultName + device.id;
+        if (nameEl && nameEl.textContent !== newName) {
+          nameEl.textContent = newName;
+        }
+
+        // Call correct update function based on type
+        if (shouldBeBlind) {
+          updateBlindDeviceCard(device.id, state);
+        } else {
+          updateDeviceCard(device.id, state);
+        }
+
+        // Re-append to ensure correct order (move in DOM)
+        list.appendChild(card);
+      }
+
+    } else {
+      // CASE 2: CREATE NEW — only new cards get the slide-in animation
+      const deviceType = device.type || 'lumibot';
+      const shouldBeBlind = deviceType === 'blind' || deviceType === 'stepper';
+      card = shouldBeBlind
+        ? createBlindDeviceCard(device, state, index)
+        : createDeviceCard(device, state, index);
+      list.appendChild(card);
+
+      // Staggered entry animation ONLY for genuinely new cards
+      const staggerDelay = Math.min(index, 5) * 0.08;
+      card.style.animationDelay = `${staggerDelay}s`;
+      card.classList.add('card-enter');
+    }
+  });
+
+  // CASE 3: REMOVE DELETED
+  // Any cards still in the map were not in the new list
+  existingCards.forEach((card, id) => {
+    card.remove();
+    // Cleanup MQTT subscription
+    if (MQTTClient && typeof MQTTClient.unsubscribeDevice === 'function') {
+      MQTTClient.unsubscribeDevice(id);
+    }
+  });
+
+  // Always add the "Add Device" card at the end
+  // Reset animation delay for add card to avoid it waiting unnecessarily if moved
+  addCard.style.animationDelay = `${Math.min(devices.length, 6) * 0.08}s`;
+  list.appendChild(addCard);
+
+  if (countEl) {
+    countEl.textContent = `${devices.length} device${devices.length !== 1 ? 's' : ''}`;
+  }
+
+  // Initial ambient background check
+  updateAmbientBackground();
+}
+
+
+// Background Firebase sync - runs after initial render
+// CRITICAL: Firebase is the SOURCE OF TRUTH for device list
+// Background Firebase sync - Real-time listener
+// CRITICAL: Firebase is the SOURCE OF TRUTH for device list
+let deviceSubscription = null;
+
+async function setupFirebaseSubscription(list, emptyState, countEl) {
+  try {
+    await Auth.waitForAuthReady();
+    const user = Auth.getUser();
+    const homeId = window.activeHomeId;
+    if (!user || !homeId) {
+      console.debug('[Index] Not authenticated or no home, keeping local devices');
+      // Don't wipe local devices — render whatever is saved locally
+      const localDevices = DeviceList.getAll();
+      if (localDevices.length > 0) {
+        renderDeviceList(localDevices, list, emptyState, countEl);
+      }
+      return;
+    }
+
+    if (deviceSubscription) deviceSubscription(); // Unsubscribe existing
+
+    console.debug('[Index] Setting up Firebase real-time listener for home:', homeId);
+    await DeviceService.init();
+
+    deviceSubscription = await DeviceService.subscribeToDevices(homeId, (rawDevices) => {
+      // console.log('[Index] Received update from Firebase:', rawDevices.length, 'devices');
+
+      // Clean IDs
+      const firebaseDevices = rawDevices.map(d => {
+        const cleanId = d.id.toString().replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
+        d.id = cleanId;
+        return d;
+      }).filter(d => /^[A-F0-9]+$/.test(d.id));
+
+      // MERGE: Preserve recently-added local devices that haven't synced to Firebase yet
+      const localDevices = DeviceList.getAll();
+      const firebaseIds = new Set(firebaseDevices.map(d => d.id));
+      const GRACE_PERIOD_MS = 5 * 60 * 1000; // 5 minutes
+      const now = Date.now();
+
+      // Find local-only devices added recently (likely from setup wizard)
+      // Exclude devices currently being deleted to prevent flash-back
+      const recentLocalOnly = localDevices.filter(d => {
+        if (firebaseIds.has(d.id)) return false; // Already in Firebase
+        if (_pendingDeletions.has(d.id)) return false; // Being deleted right now
+        const addedAt = d.addedAt || 0;
+        return (now - addedAt) < GRACE_PERIOD_MS;
+      });
+
+      if (recentLocalOnly.length > 0) {
+        console.log(`[Index] Preserving ${recentLocalOnly.length} recently-added local device(s):`,
+          recentLocalOnly.map(d => d.id).join(', '));
+      }
+
+      // Merged list = Firebase devices + recent local-only devices
+      const mergedDevices = [...firebaseDevices, ...recentLocalOnly];
+
+      // Basic diff check to avoid unnecessary re-renders
+      // We include Name in the comparison to ensure Rename triggers re-render
+      const localJSON = JSON.stringify(localDevices.map(d => ({
+        id: d.id,
+        name: d.name,
+        type: d.type || 'lumibot'
+      })).sort((a, b) => a.id.localeCompare(b.id)));
+
+      const mergedJSON = JSON.stringify(mergedDevices.map(d => ({
+        id: d.id,
+        name: d.name,
+        type: d.type || 'lumibot'
+      })).sort((a, b) => a.id.localeCompare(b.id)));
+
+      const hasSkeletons = list.querySelector('.device-card:not([data-device-id]):not(.error-card)') !== null;
+
+      if (localJSON !== mergedJSON || localDevices.length !== mergedDevices.length || hasSkeletons) {
+        // console.log('[Index] Device list/names changed, updating UI');
+
+        // SAFETY: If Firebase returns 0 devices but local has devices,
+        // skip the wipe — this likely means migration hasn't completed or rules blocked the read
+        if (mergedDevices.length === 0 && localDevices.length > 0) {
+          console.warn('[Index] ⚠️ Firebase returned 0 devices but local has', localDevices.length, '— keeping local (migration may be pending)');
+          return;
+        }
+
+        // Update Local Storage with merged list (Firebase + recent local)
+        // CRITICAL: Use DeviceList.STORAGE_KEY (scoped to homeId), NOT hardcoded 'zaylo-devices'
+        Storage.set(DeviceList.STORAGE_KEY, mergedDevices);
+
+        // Apply saved order before rendering
+        const orderedDevices = CardReorder.applyOrder(mergedDevices);
+        renderDeviceList(orderedDevices, list, emptyState, countEl);
+      } else {
+        console.debug('[Index] Data identical, skipping re-render');
+      }
+    });
+
+  } catch (error) {
+    console.error('[Index] Firebase subscription error:', error);
+  }
+}
+
+// ============================================
+// Update Device Card
+// ============================================
+function updateDeviceCard(deviceId, state) {
+  const card = document.getElementById(`device-${deviceId}`);
+  if (!card) return;
+
+  // Handle three states: true (online), false (offline), undefined (unknown/connecting)
+  const onlineStatus = state?._online;
+  const isOnline = onlineStatus === true;
+  const isConnecting = onlineStatus === undefined;
+  const lightOn = state?.light ?? false;
+  const mode = state?.mode ?? 0;
+
+  // Status text: show Connecting... during initial load, then Online/Offline
+  const statusText = isConnecting ? 'Connecting...' : (isOnline ? 'Online' : 'Offline');
+
+  card.classList.toggle('online', isOnline);
+
+  const icon = card.querySelector('.device-icon');
+  if (icon) icon.classList.toggle('on', lightOn);
+
+  const dot = card.querySelector('.status-dot');
+  if (dot) {
+    dot.classList.remove('online', 'connecting');
+    if (isOnline) dot.classList.add('online');
+    else if (isConnecting) dot.classList.add('connecting');
+  }
+
+  const status = card.querySelector('.device-status');
+  if (status) status.textContent = `${statusText} • ${lightOn ? 'On' : 'Off'}`;
+
+  const powerBtn = card.querySelector('[data-action="power"]');
+  if (powerBtn) powerBtn.classList.toggle('active', lightOn);
+
+  card.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.mode, 10) === mode);
+  });
+
+  if (state?.config) {
+    const alarmValue = card.querySelector('.quick-value');
+    const alarmToggle = card.querySelector('[data-action="alarm"]');
+
+    if (alarmValue) {
+      const h = state.config.alarmHour ?? 7;
+      const m = state.config.alarmMin ?? 0;
+      alarmValue.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
+    if (alarmToggle) {
+      alarmToggle.classList.toggle('active', state.config.alarmEnabled ?? false);
+    }
+  }
+
+  // Update ambient background based on overall active devices
+  updateAmbientBackground();
+}
+
+// ============================================
+// Ambient Background System
+// ============================================
+function updateAmbientBackground() {
+  if (typeof MQTTClient === 'undefined') return;
+  const devices = DeviceList.getAll();
+  let anyOn = false;
+
+  devices.forEach(device => {
+    const state = MQTTClient.getDeviceState(device.id);
+    if (state && state.light) {
+      anyOn = true;
+    }
+  });
+
+  const app = document.querySelector('.app');
+  if (app) {
+    app.classList.toggle('has-active-devices', anyOn);
+  }
+}
+
+// ============================================
+// Card Actions
+// ============================================
+function setupCardActions() {
+  const list = document.getElementById('deviceList');
+  if (!list) return;
+
+  list.addEventListener('click', (e) => {
+    const card = e.target.closest('.device-card');
+    if (!card) return;
+
+    const deviceId = card.dataset.deviceId.trim();
+
+    // 3-dots menu button → open context menu
+    if (e.target.closest('[data-action="menu"]')) {
+      e.stopPropagation();
+      DeviceContextMenu.show(deviceId);
+      // Dismiss hold-active state and reset CardReorder
+      card.classList.remove('hold-active');
+      if (CardReorder.state === 'HELD') {
+        CardReorder.state = 'IDLE';
+        CardReorder.dragCard = null;
+      }
+      return;
+    }
+
+    // Navigate to device page (only if not holding or dragging)
+    if (e.target.closest('[data-action="navigate"]')) {
+      if (CardReorder.state === 'DRAGGING' || CardReorder.state === 'HELD' || card.classList.contains('hold-active')) return;
+      const type = card.dataset.deviceType;
+      const isBlindOrStepper = type === 'blind' || type === 'stepper';
+      window.location.href = isBlindOrStepper
+        ? `blind-device.html?id=${deviceId}`
+        : `device.html?id=${deviceId}`;
+      return;
+    }
+
+    // Blind quick actions
+    if (e.target.closest('[data-action="blindOpen"]') ||
+      e.target.closest('[data-action="blindClose"]') ||
+      e.target.closest('[data-action="blindHalf"]')) {
+      const action = e.target.closest('[data-action]').dataset.action;
+      const pos = action === 'blindOpen' ? 100 : action === 'blindHalf' ? 50 : 0;
+      Haptic.selection();
+
+      // Lock the UI to prevent MQTT overwriting the optimistic button state
+      _blindTargetLock.set(deviceId, { target: pos, timestamp: Date.now() });
+
+      // Optimistic update
+      card.querySelectorAll('.blind-quick-btn').forEach(b => b.classList.remove('active'));
+      e.target.closest('.blind-quick-btn')?.classList.add('active');
+
+      const badge = card.querySelector('.blind-position-badge');
+      if (badge) {
+        badge.textContent = _badgeLabel(pos);
+        badge.classList.remove('open', 'closed', 'half');
+        badge.classList.add(_badgeClass(pos));
+      }
+
+      const statusEl = card.querySelector('.device-status');
+      if (statusEl) {
+        const parts = statusEl.textContent.split('•').map(s => s.trim());
+        const connText = parts[0] || 'Online';
+        const typeText = parts.length >= 3 ? parts[2] : 'Roller'; // Fix array bounds for undefined text
+        statusEl.textContent = `${connText} • ${_posText(pos)} • ${typeText}`;
+      }
+
+      if (MQTTClient.connected) {
+        const type = card.dataset.deviceType;
+        if (type === 'stepper' || type === 'blind') {
+          MQTTClient.publishStepperControl(deviceId, { blindPosition: pos });
+        } else {
+          MQTTClient.publishControl(deviceId, { blindPosition: pos, blindOpen: pos > 0 });
+        }
+      }
+
+      // Save to local blind state
+      try {
+        const key = `blind-state-${deviceId}`;
+        const saved = JSON.parse(localStorage.getItem(key) || '{}');
+        saved.position = pos;
+        saved.isOpen = pos > 0;
+        localStorage.setItem(key, JSON.stringify(saved));
+      } catch (ex) { /* ignore */ }
+      return;
+    }
+
+    // Blind automation rule toggle (carousel)
+    if (e.target.closest('[data-action="blindAutoRule"]')) {
+      const toggle = e.target.closest('[data-action="blindAutoRule"]');
+      const rule = toggle.dataset.rule;
+      if (!rule) return;
+
+      const enabled = !toggle.classList.contains('active');
+      toggle.classList.toggle('active', enabled);
+      if (typeof Haptic !== 'undefined') Haptic.light();
+
+      // Update status label text
+      const statusEl = card.querySelector(`.blind-auto-status-${rule}`);
+      if (statusEl) statusEl.textContent = enabled ? 'Active' : 'Off';
+
+      try {
+        const key = `blind-state-${deviceId}`;
+        const saved = JSON.parse(localStorage.getItem(key) || '{}');
+        if (!saved.rules) saved.rules = {};
+        saved.rules[rule] = enabled;
+        localStorage.setItem(key, JSON.stringify(saved));
+
+        // Publish updated rules to MQTT so device and other clients stay in sync
+        if (typeof MQTTClient !== 'undefined' && MQTTClient.connected) {
+          MQTTClient.publishConfig(deviceId, { rules: saved.rules });
+        }
+
+        // Notify automation engine
+        if (typeof AutomationEngine !== 'undefined' && AutomationEngine.evaluate) {
+          AutomationEngine.evaluate();
+        }
+      } catch (ex) { /* ignore */ }
+      return;
+    }
+
+    // Power toggle
+    if (e.target.closest('[data-action="power"]')) {
+      if (!MQTTClient.connected) {
+        console.warn(`[Index] Cannot toggle power - MQTT not connected (State: ${MQTTClient.connectionState})`);
+        Toast.error('Not connected. Reconnecting...');
+        Haptic.error();
+        MQTTClient.connect(); // Force reconnect attempt
+        return;
+      }
+
+      const currentState = MQTTClient.getDeviceState(deviceId);
+      const newState = !(currentState?.light ?? false);
+      MQTTClient.publishControl(deviceId, { light: newState });
+      Haptic.medium();
+
+      // Optimistic update with spring animation
+      const btn = card.querySelector('[data-action="power"]');
+      if (btn) {
+        btn.classList.toggle('active', newState);
+        btn.style.transition = 'transform 0.1s ease-in';
+        btn.style.transform = 'scale(0.82)';
+        setTimeout(() => {
+          btn.style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
+          btn.style.transform = '';
+        }, 120);
+      }
+      return;
+    }
+
+    // Mode buttons
+    if (e.target.closest('[data-mode]')) {
+      if (!MQTTClient.connected) {
+        console.warn(`[Index] Cannot change mode - MQTT not connected (State: ${MQTTClient.connectionState})`);
+        Toast.error('Not connected. Reconnecting...');
+        Haptic.error();
+        MQTTClient.connect(); // Force reconnect attempt
+        return;
+      }
+
+      const btn = e.target.closest('[data-mode]');
+      const mode = parseInt(btn.dataset.mode, 10);
+      MQTTClient.publishControl(deviceId, { mode });
+      Haptic.selection();
+
+      // Optimistic update
+      card.querySelectorAll('[data-mode]').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.mode, 10) === mode);
+      });
+      return;
+    }
+
+    // Alarm toggle
+    if (e.target.closest('[data-action="alarm"]')) {
+      if (!MQTTClient.connected) {
+        console.warn(`[Index] Cannot toggle alarm - MQTT not connected (State: ${MQTTClient.connectionState})`);
+        Toast.error('Not connected. Reconnecting...');
+        Haptic.error();
+        MQTTClient.connect(); // Force reconnect attempt
+        return;
+      }
+
+      const toggle = e.target.closest('[data-action="alarm"]');
+      const enabled = !toggle.classList.contains('active');
+      Haptic.light();
+
+      // Optimistic update
+      toggle.classList.toggle('active', enabled);
+      console.debug(`[Index] Setting alarm for ${deviceId}: ${enabled}`);
+      MQTTClient.publishConfig(deviceId, { alarmEnabled: enabled });
+      return;
+    }
+  });
+}
+
+
+function showAddDeviceModal() {
+  const { modal, close } = Modal.create({
+    title: 'Add Device',
+    content: `
+            <div style="text-align: center; margin-bottom: 24px;">
+                <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                    What type of device are you adding?
+                </p>
+                
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <button class="modal-option-btn" id="addLumibotBtn" style="
+                        display: flex;
+                        align-items: center;
+                        gap: 16px;
+                        padding: 16px 20px;
+                        background: rgba(99, 102, 241, 0.1);
+                        border: 2px solid var(--accent);
+                        border-radius: 16px;
+                        color: var(--text-primary);
+                        font-family: var(--font-family);
+                        font-size: 16px;
+                        cursor: pointer;
+                        transition: all 0.2s ease;
+                        width: 100%;
+                        text-align: left;
+                    ">
+                        <span style="font-size: 28px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lightbulb"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>
+                        <div>
+                            <div style="font-weight: 700;">Zaylo Lumibot</div>
+                            <div style="font-size: 12px; color: var(--text-tertiary);">Smart light switch with radar</div>
+                        </div>
+                    </button>
+                    
+                    <button class="modal-option-btn" id="addBlindBtn" style="
+                        display: flex;
+                        align-items: center;
+                        gap: 16px;
+                        padding: 16px 20px;
+                        background: rgba(20, 184, 166, 0.08);
+                        border: 2px solid rgba(20, 184, 166, 0.4);
+                        border-radius: 16px;
+                        color: var(--text-primary);
+                        font-family: var(--font-family);
+                        font-size: 16px;
+                        cursor: pointer;
+                        transition: all 0.2s ease;
+                        width: 100%;
+                        text-align: left;
+                    ">
+                        <span style="font-size: 28px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-blinds"><path d="M3 3h18"/><path d="M20 7H8"/><path d="M20 11H8"/><path d="M10 19h10"/><path d="M8 15h12"/><path d="M4 3v14"/><circle cx="4" cy="19" r="2"/></svg></span>
+                        <div>
+                            <div style="font-weight: 700;">Smart Blinds</div>
+                            <div style="font-size: 12px; color: var(--text-tertiary);">Motorized blinds control</div>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        `,
+    actions: []
+  });
+
+  modal.querySelector('#addLumibotBtn')?.addEventListener('click', () => {
+    close();
+    showLumibotAddOptions();
+  });
+
+  modal.querySelector('#addBlindBtn')?.addEventListener('click', () => {
+    close();
+    showBlindAddOptions();
+  });
+}
+
+// Zaylo-specific add options (setup new vs add existing)
+function showLumibotAddOptions() {
+  const { modal, close } = Modal.create({
+    title: 'Add Zaylo Lumibot',
+    content: `
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <button class="modal-option-btn" id="setupNewBtn" style="
+                    display: flex; align-items: center; gap: 16px;
+                    padding: 16px 20px;
+                    background: rgba(99, 102, 241, 0.1);
+                    border: 2px solid var(--accent);
+                    border-radius: 16px;
+                    color: var(--text-primary);
+                    font-family: var(--font-family); font-size: 16px;
+                    cursor: pointer; transition: all 0.2s ease;
+                    width: 100%; text-align: left;
+                ">
+                    <span style="display:inline-flex; align-items:center; color:var(--accent);"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+                    <div>
+                        <div style="font-weight: 700;">Setup New Device</div>
+                        <div style="font-size: 12px; color: var(--text-tertiary);">Configure a brand new Zaylo Lumibot</div>
+                    </div>
+                </button>
+                <button class="modal-option-btn" id="addExistingBtn" style="
+                    display: flex; align-items: center; gap: 16px;
+                    padding: 16px 20px;
+                    background: var(--bg-glass);
+                    border: 2px solid var(--border-glass);
+                    border-radius: 16px;
+                    color: var(--text-primary);
+                    font-family: var(--font-family); font-size: 16px;
+                    cursor: pointer; transition: all 0.2s ease;
+                    width: 100%; text-align: left;
+                ">
+                    <span style="font-size: 24px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-plus"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+                    <div>
+                        <div style="font-weight: 700;">Add Existing Device</div>
+                        <div style="font-size: 12px; color: var(--text-tertiary);">Enter a device ID manually</div>
+                    </div>
+                </button>
+            </div>
+        `,
+    actions: []
+  });
+
+  modal.querySelector('#setupNewBtn')?.addEventListener('click', () => {
+    close();
+    window.location.href = 'setup.html';
+  });
+
+  modal.querySelector('#addExistingBtn')?.addEventListener('click', () => {
+    close();
+    showAddExistingModal('lumibot');
+  });
+}
+
+function showBlindAddOptions() {
+  const { modal, close } = Modal.create({
+    title: 'Add Smart Blinds',
+    content: `
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <button class="modal-option-btn" id="setupNewBtn" style="
+                    display: flex; align-items: center; gap: 16px;
+                    padding: 16px 20px;
+                    background: rgba(20, 184, 166, 0.1);
+                    border: 2px solid rgba(20, 184, 166, 0.5);
+                    border-radius: 16px;
+                    color: var(--text-primary);
+                    font-family: var(--font-family); font-size: 16px;
+                    cursor: pointer; transition: all 0.2s ease;
+                    width: 100%; text-align: left;
+                ">
+                    <span style="display:inline-flex; align-items:center; color:var(--accent);"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+                    <div>
+                        <div style="font-weight: 700;">Setup New Device</div>
+                        <div style="font-size: 12px; color: var(--text-tertiary);">Configure a brand new Stepper Motor</div>
+                    </div>
+                </button>
+                <button class="modal-option-btn" id="addExistingBtn" style="
+                    display: flex; align-items: center; gap: 16px;
+                    padding: 16px 20px;
+                    background: var(--bg-glass);
+                    border: 2px solid var(--border-glass);
+                    border-radius: 16px;
+                    color: var(--text-primary);
+                    font-family: var(--font-family); font-size: 16px;
+                    cursor: pointer; transition: all 0.2s ease;
+                    width: 100%; text-align: left;
+                ">
+                    <span style="font-size: 24px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-plus"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>
+                    <div>
+                        <div style="font-weight: 700;">Add Existing Device</div>
+                        <div style="font-size: 12px; color: var(--text-tertiary);">Enter a device ID manually</div>
+                    </div>
+                </button>
+            </div>
+        `,
+    actions: []
+  });
+
+  modal.querySelector('#setupNewBtn')?.addEventListener('click', () => {
+    close();
+    window.location.href = 'setup.html?type=stepper';
+  });
+
+  modal.querySelector('#addExistingBtn')?.addEventListener('click', () => {
+    close();
+    showAddExistingModal('blind'); // label smart blinds as 'blind' internally for existing devices
+  });
+}
+
+
+function showAddExistingModal(deviceType = 'lumibot') {
+  const isBlind = deviceType === 'blind';
+  const typeLabel = isBlind ? 'Smart Blinds' : 'Zaylo Lumibot';
+  const defaultName = isBlind ? 'Blinds' : 'Zaylo Lumibot';
+  const { modal, close } = Modal.create({
+    title: 'Add Existing Device',
+    content: `
+            <p style="color: var(--text-secondary); margin-bottom: 20px;">
+                Enter the 4-character Device ID shown on your Zaylo device
+            </p>
+            <div style="margin-bottom: 16px;">
+                <input 
+                    type="text" 
+                    id="deviceIdInput"
+                    placeholder="A1B2" 
+                    maxlength="4"
+                    style="
+                        width: 100%;
+                        padding: 16px;
+                        background: var(--bg-glass);
+                        border: 2px solid var(--border-glass);
+                        border-radius: 12px;
+                        color: var(--text-primary);
+                        font-size: 24px;
+                        font-family: monospace;
+                        text-align: center;
+                        text-transform: uppercase;
+                        letter-spacing: 8px;
+                    "
+                >
+            </div>
+            <div>
+                <input 
+                    type="text" 
+                    id="deviceNameInput"
+                    placeholder="Device nickname (optional)" 
+                    style="
+                        width: 100%;
+                        padding: 14px;
+                        background: var(--bg-glass);
+                        border: 1px solid var(--border-glass);
+                        border-radius: 10px;
+                        color: var(--text-primary);
+                        font-size: 14px;
+                        font-family: var(--font-family);
+                    "
+                >
+            </div>
+        `,
+    actions: [
+      { label: 'Cancel', primary: false },
+      {
+        label: 'Add Device',
+        primary: true,
+        onClick: async () => {
+          const idInput = modal.querySelector('#deviceIdInput');
+          const nameInput = modal.querySelector('#deviceNameInput');
+
+          const id = idInput?.value.trim().toUpperCase() || '';
+          const name = nameInput?.value.trim() || '';
+
+          if (!/^[A-F0-9]{4}$/.test(id)) {
+            Toast.error('Please enter a valid 4-character ID');
+            return false;
+          }
+
+          // Add to local storage
+          const added = DeviceList.add({
+            id,
+            name: name || `${defaultName}-${id}`,
+            type: deviceType
+          });
+
+          if (!added) {
+            Toast.warning('Device already exists');
+            return false;
+          }
+
+          // Add to Firebase if authenticated
+          const user = Auth.getUser();
+          if (user) {
+            const btn = modal.querySelector('.btn-primary'); // Get the button from current modal
+            if (btn) {
+              btn.textContent = 'Adding...';
+              btn.disabled = true;
+            }
+
+            try {
+              await DeviceService.init();
+              const homeId = window.activeHomeId;
+              await DeviceService.addDevice(homeId, { id, name: name || `${defaultName}-${id}`, type: deviceType });
+            } catch (error) {
+              console.error('[Index] Failed to add device to Firebase:', error);
+              Toast.error('Saved locally, but sync failed');
+            }
+          }
+
+          MQTTClient.subscribeDevice(id);
+          renderDevices();
+          Toast.success('Device added!');
+          return true;
+        }
+      }
+    ]
+  });
+
+  // Focus and format input
+  const input = modal.querySelector('#deviceIdInput');
+  if (input) {
+    // Removed auto-focus to prevent iOS/Android keyboard from causing page scroll jumps
+    input.addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-F0-9]/g, '');
+    });
+  }
+}
+
+// ============================================
+// MQTT Status
+// ============================================
+function updateMQTTStatus(connected) {
+  const status = document.getElementById('mqttStatus');
+  const text = document.getElementById('mqttText');
+
+  if (status) {
+    status.classList.toggle('connected', connected);
+    status.classList.add('visible');
+
+    if (text) text.textContent = connected ? 'MQTT Connected' : 'No MQTT Connection';
+
+    if (connected) {
+      setTimeout(() => status.classList.remove('visible'), 3000);
+
+      const list = document.getElementById('deviceList');
+      if (list && list.querySelector('.error-card')) {
+        renderDevices();
+      }
+    } else {
+      const list = document.getElementById('deviceList');
+      if (list && typeof DeviceList !== 'undefined' && DeviceList.getAll().length === 0) {
+        renderNoConnectionCard(list);
+      }
+    }
+  }
+}
+
+// ============================================
+// MQTT Connection
+// ============================================
+let mqttInitialized = false; // Guard
+
+async function initMQTT() {
+  if (mqttInitialized) return;
+  mqttInitialized = true;
+
+  // Force correct path if it got messed up by the crash cycling
+  if (localStorage.getItem('zaylo-BrokerPath') === '') {
+    localStorage.setItem('zaylo-BrokerPath', '/mqtt');
+    console.log('[Index] 🔧 Fixed corrupted WebSocket path');
+  }
+
+  // Clear previous listeners to prevent duplicates on hot-reload
+  MQTTClient.clearCallbacks();
+
+  // CRITICAL FIX: Reset reconnect state for fresh page load (same as device.js)
+  // This prevents stale state from causing Code 8 disconnects
+  MQTTClient.reconnectAttempts = 0;
+  MQTTClient.reconnectDelay = 1000;
+
+  // PWA SUPPORT: Initialize visibility change handler for reconnection on app resume
+  MQTTClient.initVisibilityHandler();
+
+  // ============================================
+  // CRITICAL: Clean up invalid devices BEFORE connecting
+  // Invalid device IDs in localStorage can cause broker rejection
+  // ============================================
+
+
+  MQTTClient.on('onConnect', async () => {
+    updateMQTTStatus(true);
+    console.log('[Index] MQTT Connected. Starting sequential subscription...');
+
+    const deviceList = DeviceList.getAll();
+
+    if (deviceList.length === 0) {
+      console.log('[Index] No devices to subscribe to.');
+      return;
+    }
+
+    // SEQUENTIAL SUBSCRIPTION SCHEDULER
+    // Strictly subscribes to one device at a time to prevent packet floods (Code 8)
+    const subscribeSequentially = (devices, index = 0) => {
+      if (!MQTTClient.connected) {
+        console.warn('[Index] Connection lost during sequence, stopping.');
+        return;
+      }
+
+      if (index >= devices.length) {
+        console.log('[Index] ✅ All devices subscribed successfully.');
+        return;
+      }
+
+      const device = devices[index];
+
+      // CRITICAL: POISON PILL CHECK
+      // If a device ID is null, empty, or contains invalid characters, subscribing to it 
+      // can cause an immediate "Code 8" broker disconnect.
+      const isValidId = device.id && /^[A-F0-9]+$/.test(device.id);
+
+      if (!isValidId) {
+        console.warn(`[Index] ⚠️ SKIPPING INVALID DEVICE ID: "${device.id}" (Poison Pill)`);
+        console.warn('[Index] This device ID causes Code 8 crashes. Skipping safely.');
+        // Skip this device immediately
+        subscribeSequentially(devices, index + 1);
+        return;
+      }
+
+      console.log(`[Index] [${index + 1}/${devices.length}] Subscribing to: ${device.id}`);
+
+      // 1. Subscribe
+      MQTTClient.subscribeDevice(device.id);
+
+      // 2. Wait 150ms then request state (reduced from 300ms — _activeSubscriptions guard prevents floods)
+      setTimeout(() => {
+        if (MQTTClient.connected) {
+          MQTTClient.publishControl(device.id, { command: 'getState' });
+
+          setTimeout(() => {
+            const currentState = MQTTClient.getDeviceState(device.id);
+            // Check if device has received any real state response (not just a stale LWT)
+            const hasRealState = currentState && (currentState.position !== undefined || currentState.blindPosition !== undefined || currentState.light !== undefined || currentState.mode !== undefined);
+            // If the device has no state yet, or it's not confirmed online
+            if (!currentState || currentState._online === undefined || (!hasRealState && currentState._online === false)) {
+                // Determine if it's a blind device that might lack getState support
+                const deviceType = device.type || 'lumibot';
+                const isBlind = deviceType === 'blind' || deviceType === 'stepper';
+                
+                if (isBlind) {
+                    // For blinds, assume online if no explicit state response was received.
+                    // A stale retained LWT "offline" message is NOT reliable for blind status.
+                    console.log(`[Index] Device timeout for blind/stepper: ${device.id}. Assuming Online since blind firmware may lack getState.`);
+                    const assumedState = currentState ? { ...currentState, _online: true } : { _online: true };
+                    MQTTClient.deviceStates.set(device.id, assumedState);
+                    if (typeof StateStore !== 'undefined') StateStore.update(device.id, assumedState);
+                    MQTTClient.callbacks.onStateUpdate.forEach(cb => { try { cb(device.id, assumedState); } catch(e){} });
+                } else {
+                    console.log(`[Index] Device timeout: ${device.id}. Marking as Offline.`);
+                    // Force a state update, but preserve existing properties if any
+                    const offlineState = currentState ? { ...currentState, _online: false } : { _online: false };
+                    MQTTClient.deviceStates.set(device.id, offlineState);
+                    if (typeof StateStore !== 'undefined') StateStore.update(device.id, offlineState);
+                    MQTTClient.callbacks.onStateUpdate.forEach(cb => { try { cb(device.id, offlineState); } catch(e){} });
+                }
+            }
+          }, 3000);
+
+          // 3. Wait 200ms before processing next device (reduced from 500ms)
+          setTimeout(() => {
+            subscribeSequentially(devices, index + 1);
+          }, 200);
+        }
+      }, 300);
+    };
+
+    // Start the sequence
+    subscribeSequentially(deviceList);
+  });
+
+  MQTTClient.on('onDisconnect', () => {
+    updateMQTTStatus(false);
+  });
+
+  // PERFORMANCE: Batch state → DOM updates via requestAnimationFrame
+  // Multiple MQTT messages arriving in rapid succession are coalesced into a single frame
+  const _pendingStateUpdates = new Map();
+  let _stateUpdateRafId = null;
+
+  MQTTClient.on('onStateUpdate', (deviceId, state) => {
+    // Queue the update (latest state wins per device)
+    _pendingStateUpdates.set(deviceId, state);
+
+    // Schedule a single RAF to flush all pending updates
+    if (!_stateUpdateRafId) {
+      _stateUpdateRafId = requestAnimationFrame(() => {
+        _pendingStateUpdates.forEach((pendingState, pendingId) => {
+          const card = document.getElementById(`device-${pendingId}`);
+          if (card && card.classList.contains('blind-card')) {
+            updateBlindDeviceCard(pendingId, pendingState);
+          } else {
+            updateDeviceCard(pendingId, pendingState);
+          }
+
+          // PERSIST: Save state to cache so device page loads instantly
+          const stateToCache = {
+            light: pendingState.light,
+            mode: pendingState.mode,
+            _online: pendingState._online,
+            isSleeping: pendingState.isSleeping,
+            config: pendingState.config
+          };
+          DeviceList.update(pendingId, { state: stateToCache });
+        });
+        _pendingStateUpdates.clear();
+        _stateUpdateRafId = null;
+      });
+    }
+  });
+
+  // Start connection
+  try {
+    await MQTTClient.connect();
+  } catch (err) {
+    console.error('[Index] Initial MQTT connection failed:', err);
+    updateMQTTStatus(false);
+  }
+}
+
+// ============================================
+// Home Settings Modal
+// ============================================
+async function showHomeSettingsModal() {
+  if (typeof HomeService === 'undefined') {
+    Toast.error('Home service not available');
+    return;
+  }
+
+  const user = Auth.getUser();
+  if (!user) {
+    Toast.error('Please sign in first');
+    return;
+  }
+
+  const homeId = window.activeHomeId;
+  if (!homeId) {
+    Toast.error('No active home');
+    return;
+  }
+
+  // Fetch data in parallel
+  const [homeDetails, members, homes, userRole] = await Promise.all([
+    HomeService.getHomeDetails(homeId),
+    HomeService.getMembers(homeId),
+    HomeService.getHomes(user.uid),
+    HomeService.getUserRole(homeId, user.uid)
+  ]);
+
+  const isOwner = userRole === 'owner';
+  const homeName = homeDetails?.name || 'My Home';
+
+  // Build member list HTML
+  const memberListHtml = members.map(m => {
+    const isMe = m.userId === user.uid;
+    const roleClass = m.role === 'owner' ? 'role-owner' : 'role-member';
+    const roleBadge = m.role === 'owner' ? 'Owner' : 'Member';
+    const removeBtn = (isOwner && !isMe) ? `<button class="home-member-remove" data-member-id="${m.userId}" title="Remove">&times;</button>` : '';
+    return `
+      <div class="home-member-item">
+        <div class="home-member-avatar">${(m.displayName || 'U').charAt(0).toUpperCase()}</div>
+        <div class="home-member-info">
+          <div class="home-member-name">${m.displayName || 'User'}${isMe ? ' (You)' : ''}</div>
+          <span class="home-role-badge ${roleClass}">${roleBadge}</span>
+        </div>
+        ${removeBtn}
+      </div>
+    `;
+  }).join('');
+
+  // Build home switcher HTML (only if multiple homes)
+  let homeSwitcherHtml = '';
+  if (homes.length > 1) {
+    const homeOptions = homes.map(h => `
+      <div class="home-switch-item ${h.id === homeId ? 'active' : ''}" data-home-id="${h.id}">
+        <span class="home-switch-icon">${h.id === homeId ? '🏠' : '🏡'}</span>
+        <span class="home-switch-name">${h.name || 'Home'}</span>
+        ${h.id === homeId ? '<span class="home-switch-active">Active</span>' : ''}
+      </div>
+    `).join('');
+    homeSwitcherHtml = `
+      <div class="home-section">
+        <h4 class="home-section-title">Switch Home</h4>
+        <div class="home-switch-list">${homeOptions}</div>
+      </div>
+    `;
+  }
+
+  const content = `
+    <div class="home-settings-content">
+      <div class="home-section">
+        <h4 class="home-section-title">Home Name</h4>
+        <div class="home-name-row">
+          <span id="homeNameDisplay" class="home-name-text">${homeName}</span>
+          ${isOwner ? '<button class="btn btn-secondary home-name-edit" id="homeRenameBtn">Edit</button>' : ''}
+        </div>
+      </div>
+
+      <div class="home-section">
+        <h4 class="home-section-title">Members (${members.length})</h4>
+        <div class="home-member-list" id="homeMemberList">
+          ${memberListHtml}
+        </div>
+      </div>
+
+      ${homeSwitcherHtml}
+
+      <div class="home-section">
+        <h4 class="home-section-title">Invite Family</h4>
+        ${isOwner ? `
+          <button class="btn btn-primary home-share-btn" id="homeShareBtn" style="width:100%;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" x2="12" y1="2" y2="15"/></svg>
+            Generate Share Code
+          </button>
+          <div id="shareCodeContainer" style="display:none; margin-top:16px;"></div>
+        ` : '<p style="color:var(--text-tertiary); font-size:13px;">Only the home owner can generate share codes.</p>'}
+      </div>
+
+      <div class="home-section">
+        <h4 class="home-section-title">Join Another Home</h4>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="joinCodeInput" class="modal-input" placeholder="Enter share code" style="flex:1; text-transform:uppercase; letter-spacing:3px; font-family:monospace; font-weight:700; text-align:center;">
+          <button class="btn btn-primary" id="joinHomeBtn">Join</button>
+        </div>
+      </div>
+
+      <div class="home-section" style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border-glass);">
+        ${isOwner ?
+          `<button class="btn btn-secondary home-danger-btn" id="deleteHomeBtn" style="width:100%; color:var(--danger);">Delete Home</button>` :
+          `<button class="btn btn-secondary home-danger-btn" id="leaveHomeBtn" style="width:100%; color:var(--danger);">Leave Home</button>`
+        }
+      </div>
+    </div>
+  `;
+
+  const { modal, close } = Modal.create({
+    title: '🏠 Home Settings',
+    content: content,
+    actions: []
+  });
+
+  // --- Event Handlers ---
+
+  // Rename home
+  modal.querySelector('#homeRenameBtn')?.addEventListener('click', () => {
+    Haptic.light();
+    Modal.input({
+      title: 'Rename Home',
+      placeholder: 'Enter new name',
+      value: homeName,
+      onSubmit: async (newName) => {
+        const clean = newName.replace(/[^a-zA-Z0-9\s\-_']/g, '').trim();
+        if (clean) {
+          const success = await HomeService.renameHome(homeId, clean, user.uid);
+          if (success) {
+            Toast.success('Home renamed');
+            const display = document.getElementById('homeNameDisplay');
+            if (display) display.textContent = clean;
+          } else {
+            Toast.error('Failed to rename');
+          }
+        }
+      }
+    });
+  });
+
+  // Remove member (owner action)
+  modal.querySelectorAll('.home-member-remove').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      Haptic.medium();
+      const memberId = btn.dataset.memberId;
+      const memberName = btn.closest('.home-member-item')?.querySelector('.home-member-name')?.textContent || 'this member';
+      Modal.confirm('Remove Member', `Remove ${memberName} from this home?`, async () => {
+        const success = await HomeService.removeMember(homeId, memberId, user.uid);
+        if (success) {
+          Toast.success('Member removed');
+          btn.closest('.home-member-item')?.remove();
+        } else {
+          Toast.error('Failed to remove member');
+        }
+      });
+    });
+  });
+
+  // Switch home
+  modal.querySelectorAll('.home-switch-item:not(.active)').forEach(item => {
+    item.addEventListener('click', async () => {
+      Haptic.medium();
+      const newHomeId = item.dataset.homeId;
+      await HomeService.setActiveHome(user.uid, newHomeId);
+      DeviceList.setHome(newHomeId);
+      Toast.success('Switching home...');
+      close();
+      setTimeout(() => location.reload(), 500);
+    });
+  });
+
+  // Generate share code
+  modal.querySelector('#homeShareBtn')?.addEventListener('click', async () => {
+    Haptic.medium();
+    const btn = modal.querySelector('#homeShareBtn');
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+
+    const result = await HomeService.generateShareCode(homeId, user.uid);
+    if (result) {
+      const expiresIn = Math.round((result.expiresAt - Date.now()) / (1000 * 60 * 60));
+      const container = modal.querySelector('#shareCodeContainer');
+      container.style.display = 'block';
+      container.innerHTML = `
+        <div class="share-code-display glass-card">
+          <div class="share-code-label">Share Code</div>
+          <div class="share-code-value" id="shareCodeValue">${result.code}</div>
+          <div class="share-code-expiry">Expires in ${expiresIn}h • Max 10 uses</div>
+          <button class="btn btn-secondary share-code-copy" id="copyCodeBtn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            Copy Code
+          </button>
+          <div id="qrCodeCanvas" style="margin-top:16px; display:flex; justify-content:center;"></div>
+        </div>
+      `;
+
+      // Copy button
+      container.querySelector('#copyCodeBtn')?.addEventListener('click', async () => {
+        Haptic.light();
+        try {
+          await navigator.clipboard.writeText(result.code);
+          Toast.success('Code copied!');
+        } catch {
+          // Fallback
+          const textarea = document.createElement('textarea');
+          textarea.value = result.code;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          textarea.remove();
+          Toast.success('Code copied!');
+        }
+      });
+
+      // Lazy-load QR code library and generate
+      try {
+        if (!window.QRCode) {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js';
+          await new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
+        if (window.QRCode) {
+          const canvas = document.createElement('canvas');
+          canvas.width = 160;
+          canvas.height = 160;
+          QRCode.toCanvas(canvas, result.code, {
+            width: 160,
+            margin: 2,
+            color: { dark: '#ffffff', light: '#00000000' }
+          });
+          canvas.style.borderRadius = '12px';
+          container.querySelector('#qrCodeCanvas')?.appendChild(canvas);
+        }
+      } catch (qrErr) {
+        console.warn('[HomeSettings] QR code generation failed:', qrErr);
+      }
+
+      btn.textContent = 'Code Generated ✓';
+    } else {
+      Toast.error('Failed to generate code');
+      btn.textContent = 'Generate Share Code';
+      btn.disabled = false;
+    }
+  });
+
+  // Join home
+  modal.querySelector('#joinHomeBtn')?.addEventListener('click', async () => {
+    Haptic.medium();
+    const code = modal.querySelector('#joinCodeInput')?.value?.trim();
+    if (!code) {
+      Toast.warning('Please enter a share code');
+      return;
+    }
+
+    const joinBtn = modal.querySelector('#joinHomeBtn');
+    joinBtn.textContent = '...';
+    joinBtn.disabled = true;
+
+    const result = await HomeService.redeemShareCode(code.toUpperCase(), user.uid);
+    if (result.success) {
+      Toast.success(`Joined "${result.homeName}"!`);
+      close();
+      // Switch to the new home
+      await HomeService.setActiveHome(user.uid, result.homeId);
+      setTimeout(() => location.reload(), 500);
+    } else {
+      Toast.error(result.error);
+      joinBtn.textContent = 'Join';
+      joinBtn.disabled = false;
+    }
+  });
+
+  // Format join code input
+  modal.querySelector('#joinCodeInput')?.addEventListener('input', (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  });
+
+  // Delete home (owner)
+  modal.querySelector('#deleteHomeBtn')?.addEventListener('click', () => {
+    Haptic.heavy();
+    Modal.confirm('Delete Home', 'This will permanently delete the home and remove all members. Devices will be unlinked. This cannot be undone.', async () => {
+      const success = await HomeService.deleteHome(homeId, user.uid);
+      if (success) {
+        Toast.success('Home deleted');
+        close();
+        setTimeout(() => location.reload(), 500);
+      } else {
+        Toast.error('Failed to delete home');
+      }
+    });
+  });
+
+  // Leave home (member)
+  modal.querySelector('#leaveHomeBtn')?.addEventListener('click', () => {
+    Haptic.heavy();
+    Modal.confirm('Leave Home', `Are you sure you want to leave "${homeName}"? You will lose access to all shared devices.`, async () => {
+      const success = await HomeService.leaveHome(homeId, user.uid);
+      if (success) {
+        Toast.success('Left home');
+        close();
+        setTimeout(() => location.reload(), 500);
+      } else {
+        Toast.error('Failed to leave home');
+      }
+    });
+  });
+}
+
+// ============================================
+// Initialize
+// ============================================
+document.addEventListener('DOMContentLoaded', async () => {
+  // ============================================
+  // CRITICAL: Resolve HomeService BEFORE any device operations
+  // This prevents race conditions with localStorage scope + Firebase subscriptions
+  // ============================================
+  try {
+    await Auth.waitForAuthReady();
+    const user = Auth.getUser();
+    if (user && typeof HomeService !== 'undefined') {
+      await HomeService.init();
+      const homeId = await HomeService.getActiveHome(user.uid);
+      // Scope localStorage to this home (prevents data bleed between homes)
+      DeviceList.setHome(homeId);
+      if (window.DEBUG) console.log('[Index] Active home resolved:', homeId);
+    }
+  } catch (e) {
+    console.error('[Index] HomeService init failed (degraded mode):', e);
+  }
+
+  // ============================================
+  // Clean up invalid devices IMMEDIATELY on load
+  // Must run BEFORE renderDevices to ensure DOM is clean
+  // ============================================
+  const devices = DeviceList.getAll();
+  let devicesChanged = false;
+
+  const validDevices = devices.map(d => {
+    if (!d.id) return null;
+
+    // Aggressively strip ALL non-alphanumeric characters (newlines, spaces, hidden unicode)
+    const cleanId = d.id.toString().replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
+
+    if (d.id !== cleanId) {
+      console.log(`[Index] 🧹 Cleaned corrupted ID (onLoad): "${d.id}" -> "${cleanId}"`);
+      d.id = cleanId;
+      devicesChanged = true;
+    }
+
+    if (!/^[A-F0-9]+$/.test(cleanId)) {
+      console.warn(`[Index] ⚠️ Removing unsalvageable device: "${d.id}"`);
+      devicesChanged = true;
+      return null;
+    }
+
+    return d;
+  }).filter(d => d !== null);
+
+  if (devicesChanged) {
+    console.warn(`[Index] ⚠️ Saving cleaned device list to Storage (pre-render)`);
+    Storage.set(DeviceList.STORAGE_KEY, validDevices);
+  }
+  // Protocol Check
+  if (window.location.protocol === 'file:') {
+    const warning = document.createElement('div');
+    warning.style.cssText = `
+          position: fixed; top: 0; left: 0; right: 0; background: #ef4444; color: white;
+          padding: 12px; text-align: center; z-index: 9999; font-weight: bold;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      `;
+    warning.innerHTML = `
+          ⚠️ Running via file:// protocol. Connection issues expected. 
+          <br><span style="font-weight: normal; font-size: 0.9em;">Please run "start_server.bat" to fix.</span>
+      `;
+    document.body.appendChild(warning);
+    setTimeout(() => warning.remove(), 10000);
+  }
+
+  // Theme
+  Theme.init();
+  const themeBtn = document.getElementById('themeToggle');
+  if (themeBtn) {
+    themeBtn.innerHTML = Theme.get() !== 'light' ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
+    themeBtn.addEventListener('click', () => {
+      Haptic.light();
+      const newTheme = Theme.toggle();
+      themeBtn.innerHTML = newTheme !== 'light' ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
+    });
+  }
+
+  // Empty state add button
+  document.getElementById('emptyAddBtn')?.addEventListener('click', showAddDeviceModal);
+
+  // Setup card actions
+  setupCardActions();
+
+  // Setup logout button (guarded against double-tap)
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    guardClick(logoutBtn, () => {
+      Haptic.medium();
+      Modal.confirm(
+        'Sign Out',
+        'Are you sure you want to sign out?',
+        async () => {
+          try {
+            await Auth.signOut();
+          } catch (error) {
+            console.error('[Index] Logout error:', error);
+            Toast.error('Failed to sign out');
+          }
+        }
+      );
+    }, 600);
+  }
+
+  // Setup Settings Button
+  document.getElementById('settingsBtn')?.addEventListener('click', () => {
+    const currentIP = localStorage.getItem('zaylo-BrokerIP') || 'ernesto-heptamerous-lourdes.ngrok-free.dev';
+    const currentPort = localStorage.getItem('zaylo-BrokerPort') || '443';
+    const currentPath = localStorage.getItem('zaylo-BrokerPath') ?? '/mqtt';
+    const isOled = Theme.get() === 'oled';
+
+    const { modal, close } = Modal.create({
+      title: 'Settings',
+      content: `
+        <div style="margin-bottom: 20px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:14px 16px; background:var(--bg-glass); border:1px solid var(--border-glass); border-radius:14px;">
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:15px; font-weight:700; color:var(--text-primary); margin-bottom:3px;">OLED True Black</div>
+              <div style="font-size:12px; color:var(--text-tertiary); line-height:1.3;">Pure #000 backgrounds — saves battery on OLED screens</div>
+            </div>
+            <div class="toggle-mini ${isOled ? 'active' : ''}" id="oledToggle" style="margin-left:14px;">
+              <div class="thumb"></div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="display:block; color:var(--text-secondary); margin-bottom:8px; font-size:14px;">MQTT Broker (Ngrok URL)</label>
+          <input type="text" id="brokerIpInput" value="${currentIP}" style="width:100%; padding:12px; background:var(--bg-glass); border:1px solid var(--border-glass); border-radius:12px; color:var(--text-primary); font-family:monospace; font-size:12px;">
+          <p style="font-size:12px; color:var(--text-tertiary); margin-top:6px;">Default: ernesto-heptamerous-lourdes.ngrok-free.dev</p>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="display:block; color:var(--text-secondary); margin-bottom:8px; font-size:14px;">WSS Port</label>
+          <input type="number" id="brokerPortInput" value="${currentPort}" style="width:100%; padding:12px; background:var(--bg-glass); border:1px solid var(--border-glass); border-radius:12px; color:var(--text-primary); font-family:monospace;">
+          <p style="font-size:12px; color:var(--text-tertiary); margin-top:6px;">Default: 443 (Secure WebSockets via Ngrok)</p>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="display:block; color:var(--text-secondary); margin-bottom:8px; font-size:14px;">WebSocket Path</label>
+          <input type="text" id="brokerPathInput" value="${currentPath}" style="width:100%; padding:12px; background:var(--bg-glass); border:1px solid var(--border-glass); border-radius:12px; color:var(--text-primary); font-family:monospace;">
+          <p style="font-size:12px; color:var(--text-tertiary); margin-top:6px;">Default: /mqtt (Mosquitto standard). Leave empty for direct connection.</p>
+        </div>
+        <div style="padding:12px; background:rgba(99,102,241,0.1); border-radius:12px; border:1px solid rgba(99,102,241,0.2);">
+           <p style="color:var(--accent); font-size:12px; line-height:1.4; display:flex; align-items:flex-start; gap:4px; max-width:100%;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; margin-top:2px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> <span>Using secure tunnel via Ngrok. Connection is encrypted.</span></p>
+        </div>
+      `,
+      actions: [
+        { label: 'Cancel', primary: false },
+        {
+          label: 'Save & Reload',
+          primary: true,
+          onClick: () => {
+            const ip = modal.querySelector('#brokerIpInput').value.trim();
+            const port = modal.querySelector('#brokerPortInput').value.trim();
+            const path = modal.querySelector('#brokerPathInput').value.trim();
+
+            if (ip) {
+              localStorage.setItem('zaylo-BrokerIP', ip);
+              localStorage.setItem('zaylo-BrokerPort', port || '443');
+              localStorage.setItem('zaylo-BrokerPath', path);
+              Toast.success('Settings saved. Reloading...');
+              setTimeout(() => location.reload(), 1000);
+            }
+          }
+        }
+      ]
+    });
+
+    // OLED toggle handler
+    const oledToggle = modal.querySelector('#oledToggle');
+    if (oledToggle) {
+      oledToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const enabling = !oledToggle.classList.contains('active');
+        oledToggle.classList.toggle('active', enabling);
+        Haptic.light();
+
+        if (enabling) {
+          Theme.set('oled');
+        } else {
+          Theme.set('dark');
+        }
+
+        // Update the header theme button icon (moon for dark modes)
+        const themeBtn = document.getElementById('themeToggle');
+        if (themeBtn) {
+          themeBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
+        }
+      });
+    }
+  });
+
+  // Setup Home Settings Button (guarded against double-tap)
+  const homeSettingsBtn = document.getElementById('homeSettingsBtn');
+  if (homeSettingsBtn) {
+    guardClick(homeSettingsBtn, () => {
+      Haptic.light();
+      showHomeSettingsModal();
+    }, 800);
+  }
+
+  // Validate user (redirect if not logged in)
+  /* const user = await Auth.init();
+  if (!user) {
+      window.location.href = 'login.html';
+      return;
+  } */
+
+  // Initialize UI Interactables
+  DeviceContextMenu.init();
+  CardReorder.init();
+
+  // Render devices (async - loads from Firebase if authenticated)
+  await renderDevices();
+
+  // Dismiss loading splash — start immediately, don't block on async
+  const appLoader = document.getElementById('appLoader');
+  if (appLoader) {
+    appLoader.style.opacity = '0';
+    appLoader.style.visibility = 'hidden';
+    setTimeout(() => appLoader.remove(), 350);
+  }
+
+  // Initialize Pull-to-Refresh
+  const appEl = document.querySelector('.app');
+  if (appEl) {
+    new PullToRefresh(appEl, async () => {
+      console.log('[PTR] Refreshing...');
+      await renderDevices();
+      if (MQTTClient.connected) {
+        const deviceList = DeviceList.getAll();
+        deviceList.forEach(d => {
+          MQTTClient.publishControl(d.id, { command: 'getState' });
+        });
+      }
+    });
+  }
+
+  // Connect MQTT after devices are loaded
+  try {
+    await initMQTT();
+  } catch (err) {
+    console.error('[Main] Failed to initialize MQTT:', err);
+    Toast.error('Connection failed');
+  }
+});
