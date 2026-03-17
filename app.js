@@ -1,7 +1,7 @@
 /**
  * Zaylo - Core Application Utilities
  * Theme management, toasts, modals, and shared helpers
- * Version: 1.0.0
+ * Version: 1.0.0 
  */
 
 // ============================================
