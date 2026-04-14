@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <script>
+        (function() {
+            var saved = localStorage.getItem('zaylo-theme');
+            if (saved === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+            } else if (saved === 'oled') {
+                document.documentElement.setAttribute('data-theme', 'oled');
+            }
+        })();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Zaylo - Diagnostics</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css?v=411.0">
+    <link rel="stylesheet" href="diagnostics.css?v=1.0.0">
+</head>
+
+<body>
+    <div class="app diagnostics-page">
+        <!-- Ambient background orbs -->
+        <div class="ambient-bg">
+            <div class="ambient-orb ambient-orb-1"></div>
+            <div class="ambient-orb ambient-orb-2"></div>
+        </div>
+
+        <!-- Floating Header -->
+        <div class="floating-header-container">
+            <div class="header-left">
+                <button class="floating-back-btn" id="backBtn" aria-label="Go back">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m15 18-6-6 6-6" />
+                    </svg>
+                </button>
+                <div class="floating-squircle title-squircle">
+                    <h1 class="device-title">Diagnostics</h1>
+                </div>
+            </div>
+            
+            <div class="floating-squircle status-squircle" id="statusBadge">
+                <div class="status-dot"></div>
+                <span class="device-status-text" id="statusText">Connecting...</span>
+            </div>
+        </div>
+
+        <div class="tab-content" id="diagnostics-panel">
+            <div class="settings-section">
+                <h2 class="section-title">Telemetry Overview</h2>
+                <div class="diagnostics-grid">
+                    
+                    <!-- Uptime -->
+                    <div class="glass-card stat-card">
+                        <div class="stat-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                        <div class="stat-label">Uptime</div>
+                        <div class="stat-value" id="val-uptime">--:--:--</div>
+                    </div>
+
+                    <!-- Free / Min Heap -->
+                    <div class="glass-card stat-card">
+                        <div class="stat-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M3 18h6"/><path d="M3 21h6"/></svg></div>
+                        <div class="stat-label">Min Heap</div>
+                        <div class="stat-value" id="val-minHeap">-- KB</div>
+                    </div>
+
+                    <!-- Memory Gauge -->
+                    <div class="glass-card stat-card span-2">
+                        <div class="progress-container">
+                            <div class="progress-info">
+                                <span class="stat-label">Memory Usage</span>
+                                <span class="stat-sub" id="val-freeHeap">-- KB Free</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill" id="val-memBar" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h2 class="section-title">Device Health</h2>
+                <div class="glass-card settings-card">
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">Reset Reason</span>
+                            <span class="settings-row-sublabel" id="val-resetReason">--</span>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">Last Error</span>
+                            <span class="settings-row-sublabel" id="val-lastError">None</span>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">WiFi Drops</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-wifiDrops" class="highlight-val">0</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">MQTT Reconnects</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-mqttReconnects" class="highlight-val">0</span>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h2 class="section-title">Hardware Telemetry</h2>
+                <div class="glass-card settings-card">
+
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">False Triggers</span>
+                            <span class="settings-row-sublabel">Radar detections without presence</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-falseTriggers" class="highlight-val">0</span>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">Servo Cycles</span>
+                            <span class="settings-row-sublabel">Total mechanical actuations</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-servoCycles" class="highlight-val">0</span>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">Screen Wakes</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-screenWakes" class="highlight-val">0</span>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-row">
+                        <div class="settings-row-left">
+                            <span class="settings-row-label">Button Presses</span>
+                        </div>
+                        <div class="settings-row-value">
+                            <span id="val-buttonPresses" class="highlight-val">0</span>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h2 class="section-title">Radar State Machine</h2>
+                <div class="glass-card code-card" id="radarStateLog">
+                    <!-- Dynamic state logs -->
+                    <div class="code-line"><span class="c-time">0.0s</span> <span class="c-info">Waiting for telemetry...</span></div>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <h2 class="section-title">Task Scheduler</h2>
+                 <div class="glass-card code-card" id="taskStatsContainer">
+                    <div class="code-line"><span class="c-info">Task stats not available.</span></div>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <div class="power-section">
+                    <button class="btn btn-secondary reboot-btn" id="rebootBtn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                        Reboot System
+                    </button>
+                    <button class="btn btn-secondary refresh-btn" id="refreshBtn">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-8.21l-4.24 4.24"/></svg>
+                        Refresh Telemetry
+                    </button>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+
+    <script src="app.js?v=411.0"></script>
+    <script src="auth.js?v=411.0"></script>
+    <script src="mqtt.js?v=411.0"></script>
+    <script src="device-service.js?v=411.0"></script>
+    <script src="state-store.js?v=411.0"></script>
+    <script src="diagnostics.js?v=1.0.0"></script>
+</body>
+</html>
