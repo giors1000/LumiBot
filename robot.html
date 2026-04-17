@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <script>
+        (function() {
+            var saved = localStorage.getItem('zaylo-theme');
+            if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+            else if (saved === 'oled') document.documentElement.setAttribute('data-theme', 'oled');
+        })();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#050507">
+    <meta name="color-scheme" content="dark light">
+    <title>LumiBot — Robot Companion</title>
+    <meta name="description" content="Control and monitor your LumiBot desk robot companion">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-512.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=411.0">
+    <link rel="stylesheet" href="robot.css?v=1.0">
+</head>
+<body>
+    <!-- Breathing Exercise Overlay -->
+    <div class="breathing-overlay" id="breathingOverlay">
+        <button class="breathing-close" id="breathingClose" aria-label="Close">✕</button>
+        <div class="breathing-ring" id="breathingRing">
+            <span class="breathing-text" id="breathingText">Breathe</span>
+        </div>
+        <p class="breathing-instruction" id="breathingInstruction">Follow the ring. Inhale as it expands, exhale as it contracts.</p>
+    </div>
+
+    <div class="robot-app" id="robotApp">
+        <!-- Ambient Background -->
+        <div class="cyber-ambient">
+            <div class="cyber-orb cyber-orb-1"></div>
+            <div class="cyber-orb cyber-orb-2"></div>
+            <div class="cyber-orb cyber-orb-3"></div>
+        </div>
+
+        <!-- Header -->
+        <header class="robot-header">
+            <div class="robot-brand">
+                <div class="robot-brand-icon">🤖</div>
+                <div>
+                    <div class="robot-brand-name">LumiBot</div>
+                    <div class="robot-brand-sub">Companion Interface</div>
+                </div>
+            </div>
+            <div class="robot-header-actions">
+                <button class="robot-header-btn" id="btnBack" aria-label="Back to Dashboard" title="Back">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 5l-7 7 7 7"/></svg>
+                </button>
+                <button class="robot-header-btn" id="btnSettings" aria-label="Settings">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.32 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Tab Content Area -->
+        <div class="robot-content" id="robotContent">
+
+            <!-- ======== TAB 1: Digital Twin Dashboard ======== -->
+            <div class="robot-tab-panel active" id="panelDashboard" data-tab="dashboard">
+                <!-- Robot Avatar -->
+                <div class="avatar-container">
+                    <div class="avatar-holo-ring">
+                        <div class="avatar-body">
+                            <div class="avatar-robot" id="robotAvatar">
+                                <div class="robot-antenna"></div>
+                                <div class="robot-head">
+                                    <div class="robot-face">
+                                        <div class="robot-eye happy" id="eyeLeft"></div>
+                                        <div class="robot-eye happy" id="eyeRight"></div>
+                                    </div>
+                                </div>
+                                <div class="robot-torso">
+                                    <div class="robot-chest-light"></div>
+                                </div>
+                                <div class="robot-wheel-group">
+                                    <div class="robot-wheel"></div>
+                                    <div class="robot-wheel"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="robot-state-badge" id="robotStateBadge">
+                        <span class="robot-state-dot"></span>
+                        <span id="robotStateText">Balancing</span>
+                    </div>
+                </div>
+
+                <!-- Vitals -->
+                <div class="vitals-grid">
+                    <div class="vital-card" id="vitalBattery">
+                        <div class="vital-label">Battery</div>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <div class="battery-ring-container">
+                                <svg viewBox="0 0 52 52"><circle class="battery-ring-bg" cx="26" cy="26" r="22"/><circle class="battery-ring-fill" id="batteryRing" cx="26" cy="26" r="22" stroke-dasharray="138.23" stroke-dashoffset="27.65"/></svg>
+                                <div class="battery-ring-text" id="batteryText">80%</div>
+                            </div>
+                            <div><div class="vital-value" style="font-size:13px;color:var(--text-secondary);" id="batteryStatus">Healthy</div></div>
+                        </div>
+                    </div>
+                    <div class="vital-card" id="vitalLatency">
+                        <div class="vital-label">Latency</div>
+                        <div class="vital-value"><span id="latencyValue">24</span><span class="vital-unit">ms</span></div>
+                        <div class="vital-icon">📡</div>
+                        <div class="vital-bar"><div class="vital-bar-fill" id="latencyBar" style="width:24%"></div></div>
+                    </div>
+                    <div class="vital-card" id="vitalUptime">
+                        <div class="vital-label">Uptime</div>
+                        <div class="vital-value" style="font-size:20px;"><span id="uptimeValue">2h 14m</span></div>
+                        <div class="vital-icon">⏱️</div>
+                    </div>
+                    <div class="vital-card" id="vitalTemp">
+                        <div class="vital-label">CPU Temp</div>
+                        <div class="vital-value"><span id="tempValue">42</span><span class="vital-unit">°C</span></div>
+                        <div class="vital-icon">🌡️</div>
+                        <div class="vital-bar"><div class="vital-bar-fill" id="tempBar" style="width:42%;background:linear-gradient(90deg,var(--cyber-green),var(--cyber-amber))"></div></div>
+                    </div>
+                </div>
+
+                <!-- Predictive Actions -->
+                <div class="action-bar section-gap">
+                    <div class="action-bar-title">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--cyber-cyan)" stroke-width="2"><path d="M12 2a7 7 0 017 7c0 3-2 5-3.5 6.5L12 19l-3.5-3.5C7 14 5 12 5 9a7 7 0 017-7z"/><circle cx="12" cy="9" r="2"/></svg>
+                        Suggested Actions
+                    </div>
+                    <div id="actionCards">
+                        <div class="action-card" data-action="dock-sleep">
+                            <div class="action-icon">🌙</div>
+                            <div class="action-text">
+                                <div class="action-text-main">Evening routine</div>
+                                <div class="action-text-sub">Dock robot &amp; dim desk lights</div>
+                            </div>
+                            <div class="action-go">Run</div>
+                        </div>
+                        <div class="action-card" data-action="scan-desk">
+                            <div class="action-icon">📡</div>
+                            <div class="action-text">
+                                <div class="action-text-main">Scan workspace</div>
+                                <div class="action-text-sub">Map desk with ToF sensors</div>
+                            </div>
+                            <div class="action-go">Run</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ======== TAB 2: Sensor Matrix ======== -->
+            <div class="robot-tab-panel" id="panelSensors" data-tab="sensors">
+                <div class="cyber-card">
+                    <div class="cyber-card-title">ToF Radar — Live</div>
+                    <div class="radar-container" id="radarContainer">
+                        <canvas class="radar-canvas" id="radarCanvas" width="680" height="680"></canvas>
+                        <span class="radar-label radar-label-top">Front</span>
+                        <span class="radar-label radar-label-right">Right</span>
+                        <span class="radar-label radar-label-bottom">Rear</span>
+                        <span class="radar-label radar-label-left">Left</span>
+                    </div>
+                </div>
+
+                <div class="hud-row section-gap">
+                    <div class="hud-gauge">
+                        <div class="hud-gauge-label">Pitch</div>
+                        <div class="hud-gauge-value" id="hudPitch">2.4</div>
+                        <div class="hud-gauge-unit">deg</div>
+                    </div>
+                    <div class="hud-gauge">
+                        <div class="hud-gauge-label">Roll</div>
+                        <div class="hud-gauge-value" id="hudRoll">-0.8</div>
+                        <div class="hud-gauge-unit">deg</div>
+                    </div>
+                    <div class="hud-gauge">
+                        <div class="hud-gauge-label">Yaw</div>
+                        <div class="hud-gauge-value" id="hudYaw">127</div>
+                        <div class="hud-gauge-unit">deg</div>
+                    </div>
+                </div>
+
+                <div class="cyber-card section-gap joystick-section">
+                    <div class="cyber-card-title">Manual Override</div>
+                    <div class="joystick-container" id="joystickContainer">
+                        <div class="joystick-nub" id="joystickNub"></div>
+                        <div class="joystick-warning" id="joystickWarning"></div>
+                        <span class="joystick-direction joystick-dir-n">FWD</span>
+                        <span class="joystick-direction joystick-dir-s">REV</span>
+                        <span class="joystick-direction joystick-dir-e">R</span>
+                        <span class="joystick-direction joystick-dir-w">L</span>
+                    </div>
+                    <div style="text-align:center;margin-top:10px;">
+                        <span style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;" id="joystickOutput">Idle — 0%, 0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ======== TAB 3: Focus Hub ======== -->
+            <div class="robot-tab-panel" id="panelFocus" data-tab="focus">
+                <div class="focus-timer-container">
+                    <div class="focus-ring-wrap">
+                        <svg viewBox="0 0 300 300">
+                            <defs>
+                                <linearGradient id="focusGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#00f0ff"/>
+                                    <stop offset="50%" stop-color="#0080ff"/>
+                                    <stop offset="100%" stop-color="#b44aff"/>
+                                </linearGradient>
+                            </defs>
+                            <circle class="focus-ring-bg" cx="150" cy="150" r="140"/>
+                            <circle class="focus-ring-glow" id="focusRingGlow" cx="150" cy="150" r="140" stroke-dasharray="879.65" stroke-dashoffset="879.65"/>
+                            <circle class="focus-ring-fill" id="focusRingFill" cx="150" cy="150" r="140" stroke-dasharray="879.65" stroke-dashoffset="879.65"/>
+                        </svg>
+                        <div class="focus-time-display">
+                            <div class="focus-time-value" id="focusTimeValue">25:00</div>
+                            <div class="focus-time-label" id="focusTimeLabel">Ready</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="focus-presets" style="justify-content:center;">
+                    <button class="focus-preset-btn active" data-minutes="25">25 min</button>
+                    <button class="focus-preset-btn" data-minutes="45">45 min</button>
+                    <button class="focus-preset-btn" data-minutes="60">60 min</button>
+                    <button class="focus-preset-btn" data-minutes="90">90 min</button>
+                </div>
+
+                <button class="focus-start-btn" id="focusStartBtn">
+                    <span id="focusStartLabel">Start Focus Session</span>
+                </button>
+
+                <!-- Ambient Sound Control -->
+                <div class="cyber-card section-gap sound-card">
+                    <div class="cyber-card-title">Ambient Sound</div>
+                    <div class="waveform-display" id="waveformDisplay">
+                        <!-- Waveform bars generated by JS -->
+                    </div>
+                    <div class="sound-genres">
+                        <button class="sound-genre-btn active" data-genre="lofi">Lo-fi</button>
+                        <button class="sound-genre-btn" data-genre="rain">Rain</button>
+                        <button class="sound-genre-btn" data-genre="brown">Brown Noise</button>
+                        <button class="sound-genre-btn" data-genre="white">White Noise</button>
+                        <button class="sound-genre-btn" data-genre="forest">Forest</button>
+                    </div>
+                    <div class="volume-row">
+                        <span class="volume-icon">🔈</span>
+                        <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="60">
+                        <span class="volume-icon">🔊</span>
+                    </div>
+                </div>
+
+                <!-- Auto-Actions Info -->
+                <div class="cyber-card section-gap">
+                    <div class="cyber-card-title">Focus Automation</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-secondary);">
+                            <span style="font-size:16px;">💡</span> Dim room lights to 20%
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-secondary);">
+                            <span style="font-size:16px;">🪟</span> Close blinds
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-secondary);">
+                            <span style="font-size:16px;">🤖</span> Push timer to robot display
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-secondary);">
+                            <span style="font-size:16px;">🎵</span> Play ambient audio on robot speaker
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ======== TAB 4: Neural Command Center ======== -->
+            <div class="robot-tab-panel" id="panelControl" data-tab="control">
+                <div class="cyber-card">
+                    <div class="cyber-card-title">Environment Network</div>
+                    <div class="nodes-map" id="nodesMap">
+                        <svg class="nodes-lines" id="nodesLines" viewBox="0 0 300 200"></svg>
+                        <div class="env-node node-center" id="nodeRobot">
+                            <span class="env-node-icon">🤖</span>
+                            <span class="env-node-label">LumiBot</span>
+                        </div>
+                        <div class="env-node node-blinds" id="nodeBlinds" data-device="blinds">
+                            <span class="env-node-icon">🪟</span>
+                            <span class="env-node-label">Blinds</span>
+                        </div>
+                        <div class="env-node node-lights active" id="nodeLights" data-device="lights">
+                            <span class="env-node-icon">💡</span>
+                            <span class="env-node-label">Lights</span>
+                        </div>
+                        <div class="env-node node-speaker" id="nodeSpeaker" data-device="speaker">
+                            <span class="env-node-icon">🔊</span>
+                            <span class="env-node-label">Speaker</span>
+                        </div>
+                        <div class="env-node node-mic" id="nodeMic" data-device="mic">
+                            <span class="env-node-icon">🎤</span>
+                            <span class="env-node-label">Mic</span>
+                        </div>
+                    </div>
+                    <div class="node-status-grid">
+                        <div class="node-status-item" id="statusBlinds">
+                            <div class="node-status-left">
+                                <span class="node-status-icon">🪟</span>
+                                <div><div class="node-status-name">Blinds</div><div class="node-status-state" id="blindsState">Closed</div></div>
+                            </div>
+                            <div class="cyber-toggle" id="toggleBlinds" data-device="blinds"></div>
+                        </div>
+                        <div class="node-status-item" id="statusLights">
+                            <div class="node-status-left">
+                                <span class="node-status-icon">💡</span>
+                                <div><div class="node-status-name">Lights</div><div class="node-status-state" id="lightsState">On</div></div>
+                            </div>
+                            <div class="cyber-toggle on" id="toggleLights" data-device="lights"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mic Transcript -->
+                <div class="cyber-card section-gap transcript-card">
+                    <div class="cyber-card-title">Omni-Mic Feed</div>
+                    <div class="transcript-feed" id="transcriptFeed">
+                        <div class="transcript-bubble">
+                            <span>Hey, can you check my calendar for tomorrow?</span>
+                            <div class="transcript-time">18:42</div>
+                        </div>
+                        <div class="transcript-bubble">
+                            <span>...keyboard typing detected...</span>
+                            <div class="transcript-time">18:43</div>
+                        </div>
+                    </div>
+                    <div class="transcript-input-row">
+                        <input type="text" class="transcript-input" id="transcriptInput" placeholder="Type a command...">
+                        <button class="transcript-send-btn" id="transcriptSend" aria-label="Send">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Quick Commands -->
+                <div class="section-gap">
+                    <div class="cyber-card-title" style="padding-left:2px;">Quick Commands</div>
+                    <div class="command-grid">
+                        <div class="command-tile" data-cmd="come-here">
+                            <div class="command-tile-icon">📍</div>
+                            <div class="command-tile-label">Come Here</div>
+                        </div>
+                        <div class="command-tile" data-cmd="go-dock">
+                            <div class="command-tile-icon">🔌</div>
+                            <div class="command-tile-label">Go Dock</div>
+                        </div>
+                        <div class="command-tile" data-cmd="scan">
+                            <div class="command-tile-icon">📡</div>
+                            <div class="command-tile-label">Scan Desk</div>
+                        </div>
+                        <div class="command-tile" data-cmd="play-music">
+                            <div class="command-tile-icon">🎵</div>
+                            <div class="command-tile-label">Play Music</div>
+                        </div>
+                        <div class="command-tile" data-cmd="stop">
+                            <div class="command-tile-icon">⏹️</div>
+                            <div class="command-tile-label">Stop</div>
+                        </div>
+                        <div class="command-tile" data-cmd="dance">
+                            <div class="command-tile-icon">💃</div>
+                            <div class="command-tile-label">Dance</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Tab Bar -->
+        <nav class="robot-tabs" id="robotTabs">
+            <button class="robot-tab active" data-tab="dashboard" id="tabDashboard" aria-label="Dashboard">
+                <span class="robot-tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                </span>
+                <span class="robot-tab-label">Twin</span>
+            </button>
+            <button class="robot-tab" data-tab="sensors" id="tabSensors" aria-label="Sensors">
+                <span class="robot-tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="4"/></svg>
+                </span>
+                <span class="robot-tab-label">Sensors</span>
+            </button>
+            <button class="robot-tab" data-tab="focus" id="tabFocus" aria-label="Focus">
+                <span class="robot-tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </span>
+                <span class="robot-tab-label">Focus</span>
+            </button>
+            <button class="robot-tab" data-tab="control" id="tabControl" aria-label="Control">
+                <span class="robot-tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16v-4a7 7 0 0114 0v4"/><path d="M3 16a2 2 0 002 2h2a2 2 0 002-2v-3a2 2 0 00-2-2H5a2 2 0 00-2 2v3z"/><path d="M15 16a2 2 0 002 2h2a2 2 0 002-2v-3a2 2 0 00-2-2h-2a2 2 0 00-2 2v3z"/></svg>
+                </span>
+                <span class="robot-tab-label">Control</span>
+            </button>
+        </nav>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="paho-mqtt.min.js"></script>
+    <script src="mqtt.js"></script>
+    <script src="robot.js?v=1.0"></script>
+</body>
+</html>
