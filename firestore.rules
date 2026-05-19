@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================
+    // Users - Private per-user data
+    // ============================================
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      match /{subcollection=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // ============================================
+    // Homes - Shared access
+    // Owner is determined by the home document's `ownerId` field,
+    // NOT by the members subcollection (avoids circular dependency in batches).
+    // ============================================
+    match /homes/{homeId} {
+
+      // Helper: is user the home owner (reads the HOME doc, not members)
+      function isHomeOwner(uid) {
+        return resource != null && resource.data.ownerId == uid;
+      }
+
+      // Helper: is user a member of this home
+      function isMember(uid) {
+        return exists(/databases/$(database)/documents/homes/$(homeId)/members/$(uid));
+      }
+
+      // Any authenticated user can create a home
+      allow create: if request.auth != null;
+
+      // Any member or owner can read
+      allow read: if request.auth != null && (
+        isHomeOwner(request.auth.uid) || isMember(request.auth.uid)
+      );
+
+      // Only owner can update or delete
+      allow update, delete: if request.auth != null && isHomeOwner(request.auth.uid);
+
+      // Members subcollection
+      match /members/{memberId} {
+        // Any member can read, the home owner can read, or a user can read their own doc
+        // (the self-read allows membership checks before joining via share code)
+        allow read: if request.auth != null && (
+          request.auth.uid == memberId ||
+          isMember(request.auth.uid) ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+
+        // A user can add themselves as a member (self-join via share code or owner setup)
+        // OR the home owner can add members
+        allow create: if request.auth != null && (
+          request.auth.uid == memberId ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+
+        // A member can remove themselves (leave) or the owner can remove anyone
+        allow delete: if request.auth != null && (
+          request.auth.uid == memberId ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+
+        // Owner can update roles; members can update their own display info
+        allow update: if request.auth != null && (
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid ||
+          request.auth.uid == memberId
+        );
+      }
+
+      // Devices subcollection - any member or owner can CRUD
+      match /devices/{deviceId} {
+        allow read, write: if request.auth != null && (
+          isMember(request.auth.uid) ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+      }
+
+      // Share codes nested under home (if used)
+      match /shareCodes/{codeId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null &&
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid;
+      }
+    }
+
+    // ============================================
+    // Share Codes (top-level lookup collection)
+    // ============================================
+    match /shareCodes/{code} {
+      // Any authenticated user can read (to find which home a code belongs to)
+      allow read: if request.auth != null;
+      // Any authenticated user can create or update (owner creates, redeemer increments `uses`)
+      allow create, update: if request.auth != null;
+      // Only the creator can delete
+      allow delete: if request.auth != null && resource.data.createdBy == request.auth.uid;
+    }
+  }
+}
