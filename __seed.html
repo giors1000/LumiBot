@@ -1,0 +1,14 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0a0a0f;color:#5eead4;font:20px sans-serif">
+<script>
+  try {
+    localStorage.setItem('blind-state-TEST', JSON.stringify({
+      blindType:'roller', position:45, targetPosition:45, isOpen:true,
+      rules:{sunset:true, morningOpen:true, nightLock:false, temperature:false, presence:false},
+      config:{stepperOpenSpeed:2000, stepperCloseSpeed:2000, twtEnabled:false}
+    }));
+    localStorage.setItem('zaylo-theme', new URLSearchParams(location.search).get('theme') || 'dark');
+    document.body.textContent = 'seeded ' + localStorage.getItem('zaylo-theme');
+  } catch(e){ document.body.textContent = 'ERR ' + e; }
+</script>
+</body></html>
