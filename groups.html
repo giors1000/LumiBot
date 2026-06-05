@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <script>
+        (function () {
+            var saved = localStorage.getItem('zaylo-theme');
+            if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+            else if (saved === 'oled') document.documentElement.setAttribute('data-theme', 'oled');
+            if (sessionStorage.getItem('zaylo-session-active')) document.documentElement.classList.add('fast-load');
+        })();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+    <meta name="color-scheme" content="dark light">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="mobile-web-app-capable" content="yes">
+
+    <title>Spaces · Zaylo</title>
+    <meta name="description" content="Control all your smart blinds together — scenes, groups & automations">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-512.png">
+    <link rel="manifest" href="manifest.json">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="styles.css?v=425.0">
+
+    <style>
+        /* ============================================================
+           SPACES — Multi-device control center
+           Premium glass UI · scoped with .gp- prefix
+           ============================================================ */
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            margin: 0;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            min-height: 100vh;
+            min-height: 100dvh;
+            overflow-x: hidden;
+        }
+
+        /* Ambient orbs (teal + violet) */
+        .gp-ambient { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+        .gp-orb { position: absolute; border-radius: 50%; filter: blur(110px); opacity: 0.16; will-change: transform; }
+        .gp-orb-1 { width: 440px; height: 440px; background: radial-gradient(circle, rgba(20,184,166,0.6) 0%, transparent 70%); top: -14%; left: -16%; animation: gpFloat1 26s ease-in-out infinite; }
+        .gp-orb-2 { width: 400px; height: 400px; background: radial-gradient(circle, rgba(124,58,237,0.5) 0%, transparent 70%); bottom: -16%; right: -12%; animation: gpFloat2 32s ease-in-out infinite; }
+        .gp-orb-3 { width: 300px; height: 300px; background: radial-gradient(circle, rgba(139,92,246,0.32) 0%, transparent 70%); top: 42%; right: 24%; opacity: 0.1; animation: gpFloat3 24s ease-in-out infinite; }
+        @keyframes gpFloat1 { 0%,100% { transform: translate(0,0) scale(1); } 33% { transform: translate(30px,22px) scale(1.05);} 66% { transform: translate(-16px,-12px) scale(0.97);} }
+        @keyframes gpFloat2 { 0%,100% { transform: translate(0,0) scale(1);} 50% { transform: translate(-26px,-18px) scale(1.06);} }
+        @keyframes gpFloat3 { 0%,100% { transform: translate(0,0) scale(1);} 50% { transform: translate(20px,-14px) scale(0.95);} }
+
+        /* The shared styles.css pins html/body to 100dvh + overflow:hidden and
+           expects an inner scroll container — so .gp-app is that scroller. */
+        .gp-app {
+            position: relative;
+            z-index: 1;
+            max-width: 720px;
+            margin: 0 auto;
+            height: 100%;
+            height: 100dvh;
+            height: var(--app-height, 100dvh);
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior-y: contain;
+            scrollbar-width: none;
+            padding: calc(env(safe-area-inset-top, 0px) + 14px) clamp(14px, 4.4vw, 22px) calc(env(safe-area-inset-bottom, 0px) + 96px);
+        }
+
+        .gp-app::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+        /* Lock background scroll while a bottom sheet is open */
+        .gp-app.sheet-lock { overflow: hidden; }
+
+        /* ---- Top bar ---- */
+        .gp-topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .gp-iconbtn {
+            width: 42px; height: 42px; flex-shrink: 0; border-radius: 14px;
+            background: var(--bg-glass); border: 1px solid var(--border-glass);
+            color: var(--text-primary); display: flex; align-items: center; justify-content: center;
+            cursor: pointer; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            transition: transform var(--duration-fast) var(--spring), background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+        }
+        .gp-iconbtn:hover { background: var(--bg-glass-hover); border-color: var(--border-glass-strong); }
+        .gp-iconbtn:active { transform: scale(0.92); }
+        .gp-topbar-title { flex: 1; min-width: 0; }
+        .gp-topbar-title h1 { font-family: var(--font-display); font-size: clamp(21px, 5.6vw, 26px); font-weight: 800; margin: 0; letter-spacing: -0.02em; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gp-topbar-title .gp-sub { display: block; font-size: 12px; color: var(--text-tertiary); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gp-conn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--text-tertiary); padding: 5px 9px; border-radius: 999px; background: var(--bg-glass); border: 1px solid var(--border-glass); }
+        .gp-conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); transition: background .3s ease, box-shadow .3s ease; }
+        .gp-conn.online .dot { background: var(--success); box-shadow: 0 0 8px var(--success-glow); }
+        .gp-conn.online { color: var(--success-light); }
+
+        /* ---- Hero master ---- */
+        .gp-hero {
+            position: relative;
+            border-radius: clamp(20px, 4.4vw, 26px);
+            padding: clamp(13px, 3.6vw, 17px);
+            margin-bottom: 14px;
+            background:
+                radial-gradient(120% 140% at 100% 0%, rgba(20,184,166,0.16), transparent 55%),
+                radial-gradient(110% 130% at 0% 100%, rgba(124,58,237,0.14), transparent 55%),
+                var(--bg-card-gradient);
+            border: 1px solid var(--border-glass);
+            border-top-color: var(--border-top-highlight);
+            box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255,255,255,0.05);
+            backdrop-filter: blur(24px) saturate(160%); -webkit-backdrop-filter: blur(24px) saturate(160%);
+            overflow: hidden;
+            animation: gpRise 0.6s var(--premium-ease) backwards;
+        }
+        .gp-hero::before {
+            content: ''; position: absolute; inset: 0; pointer-events: none;
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent 30%);
+        }
+        .gp-hero-top { display: flex; align-items: center; gap: 15px; }
+
+        /* Average ring */
+        .gp-ring { position: relative; width: 80px; height: 80px; flex-shrink: 0; }
+        .gp-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+        .gp-ring .track { fill: none; stroke: rgba(255,255,255,0.08); stroke-width: 9; }
+        .gp-ring .prog { fill: none; stroke: url(#gpRingGrad); stroke-width: 9; stroke-linecap: round; transition: stroke-dashoffset 0.7s var(--premium-ease); }
+        .gp-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .gp-ring-val { font-family: var(--font-display); font-size: 22px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+        .gp-ring-lbl { font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); margin-top: 2px; }
+
+        .gp-hero-meta { flex: 1; min-width: 0; }
+        .gp-hero-h { font-family: var(--font-display); font-size: 16.5px; font-weight: 800; letter-spacing: -0.01em; margin-bottom: 7px; }
+        .gp-stat-row { display: flex; flex-wrap: wrap; gap: 6px; }
+        .gp-chip {
+            display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px;
+            font-size: 11px; font-weight: 600; color: var(--text-secondary);
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass);
+        }
+        .gp-chip svg { width: 12px; height: 12px; opacity: 0.8; }
+        .gp-chip.live { color: var(--accent-warm-light); border-color: rgba(245,158,11,0.28); background: rgba(245,158,11,0.1); }
+
+        /* Master slider */
+        .gp-master-slider { margin-top: 13px; }
+        .gp-ms-labels { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--text-tertiary); margin-bottom: 6px; }
+        .gp-ms-value { color: #5eead4; font-weight: 800; font-variant-numeric: tabular-nums; }
+        .gp-track {
+            position: relative; height: 38px; border-radius: 13px; cursor: grab;
+            background: rgba(255,255,255,0.06); border: 1px solid var(--border-glass);
+            box-shadow: inset 0 2px 6px rgba(0,0,0,0.22);
+            touch-action: none; user-select: none; -webkit-user-select: none;
+        }
+        .gp-track.dragging { cursor: grabbing; }
+        .gp-track-fill {
+            position: absolute; top: 0; bottom: 0; left: 0; width: 50%; min-width: 8px;
+            border-radius: 12px;
+            background: linear-gradient(90deg, rgba(20,184,166,0.6), rgba(45,212,191,0.95));
+            box-shadow: 0 2px 12px rgba(20,184,166,0.32);
+            transition: width 0.18s var(--smooth);
+        }
+        .gp-track-fill::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(180deg, rgba(255,255,255,0.22), transparent 55%); }
+        .gp-track-handle {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2;
+            width: 28px; height: 28px; border-radius: 9px; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            display: flex; align-items: center; justify-content: center; transition: left 0.18s var(--smooth);
+        }
+        .gp-track-handle::before { content: ''; width: 10px; height: 2px; border-radius: 2px; background: rgba(15,23,42,0.45); box-shadow: 0 -3.5px 0 rgba(15,23,42,0.45), 0 3.5px 0 rgba(15,23,42,0.45); }
+        /* During an active drag, kill transitions so the fill/knob track the finger 1:1 */
+        .gp-track.dragging .gp-track-fill, .gp-track.dragging .gp-track-handle { transition: none; }
+
+        /* Master actions */
+        .gp-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 11px; }
+        .gp-act {
+            display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 5px;
+            border-radius: 13px; cursor: pointer; font-family: var(--font-family); font-size: 11px; font-weight: 700;
+            color: var(--text-secondary); background: rgba(255,255,255,0.045); border: 1px solid var(--border-glass);
+            transition: transform var(--duration-fast) var(--spring), background var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+        }
+        .gp-act svg { width: 18px; height: 18px; }
+        .gp-act:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+        .gp-act:active { transform: scale(0.93); }
+        .gp-act.open:hover { color: var(--accent-warm-light); border-color: rgba(245,158,11,0.3); }
+        .gp-act.close:hover { color: #5eead4; border-color: rgba(20,184,166,0.32); }
+        .gp-act.stop { color: var(--danger-light); }
+        .gp-act.stop:hover { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.32); }
+
+        /* ---- Segmented tabs ---- */
+        .gp-tabs {
+            position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+            padding: 5px; border-radius: 16px; margin-bottom: 14px;
+            background: var(--bg-glass-strong); border: 1px solid var(--border-glass);
+            backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+            position: sticky; top: 0; z-index: 20;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+        }
+        /* Width + X are measured from the active button in JS (grid gaps make a
+           pure-CSS fixed-width pill drift) — see initTabs(). */
+        .gp-tab-pill {
+            position: absolute; top: 5px; bottom: 5px; left: 0; width: 0;
+            border-radius: 12px; background: var(--accent-gradient);
+            box-shadow: 0 6px 18px rgba(124,58,237,0.34); z-index: 0;
+            transition: transform 0.42s cubic-bezier(0.34, 1.25, 0.45, 1), width 0.42s cubic-bezier(0.34, 1.25, 0.45, 1);
+            will-change: transform, width;
+        }
+        .gp-tab {
+            position: relative; z-index: 1; border: none; background: none; cursor: pointer;
+            padding: 11px 4px; border-radius: 12px; font-family: var(--font-family); font-size: 13.5px; font-weight: 700;
+            color: var(--text-tertiary); display: flex; align-items: center; justify-content: center; gap: 7px;
+            transition: color 0.28s ease, transform 0.18s var(--spring);
+        }
+        .gp-tab:active { transform: scale(0.95); }
+        .gp-tab svg { width: 16px; height: 16px; transition: transform 0.34s cubic-bezier(0.34, 1.4, 0.5, 1); }
+        .gp-tab.active { color: #fff; }
+        .gp-tab.active svg { transform: scale(1.1); }
+
+        /* ---- Panels ---- */
+        .gp-panel { display: none; }
+        .gp-panel.active { display: block; animation: gpFade 0.34s var(--premium-ease) both; }
+        /* Cards cascade in ONLY when a tab is entered (a transient class), not on
+           every live MQTT re-render — otherwise group cards would re-animate
+           each state update. The per-card inline animation-delay supplies the stagger. */
+        .gp-panel.gp-entering .gp-scene, .gp-panel.gp-entering .gp-card { animation: gpRise 0.5s var(--premium-ease) backwards; }
+
+        .gp-sec-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 2px 12px; }
+        .gp-sec-title { font-family: var(--font-display); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+        .gp-sec-title .count { color: var(--text-tertiary); font-weight: 600; margin-left: 6px; font-size: 13px; }
+        .gp-add-btn {
+            display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 999px;
+            font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: var(--font-family);
+            color: var(--accent-light); background: var(--accent-gradient-subtle); border: 1px solid rgba(124,58,237,0.3);
+            transition: transform var(--duration-fast) var(--spring), background var(--duration-fast) ease;
+        }
+        .gp-add-btn svg { width: 15px; height: 15px; }
+        .gp-add-btn:active { transform: scale(0.94); }
+
+        /* Scenes grid */
+        .gp-scene-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
+        .gp-scene {
+            position: relative; border-radius: 20px; padding: 16px; cursor: pointer; overflow: hidden;
+            background: var(--bg-card-gradient); border: 1px solid var(--border-glass);
+            border-top-color: var(--border-top-highlight); min-height: 124px;
+            display: flex; flex-direction: column; justify-content: space-between;
+            transition: transform var(--duration-normal) var(--spring), border-color var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
+        }
+        .gp-scene::after { content: ''; position: absolute; inset: 0; opacity: 0.5; pointer-events: none; background: radial-gradient(120% 90% at 100% 0%, var(--scene-glow, rgba(124,58,237,0.18)), transparent 60%); }
+        .gp-scene:hover { transform: translateY(-3px); border-color: var(--border-glass-strong); box-shadow: var(--shadow-lg); }
+        .gp-scene:active { transform: scale(0.97); }
+        .gp-scene-ico {
+            width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+            background: var(--scene-ico-bg, rgba(124,58,237,0.16)); color: var(--scene-ico-fg, var(--accent-light));
+            border: 1px solid var(--scene-ico-br, rgba(124,58,237,0.28)); position: relative; z-index: 1;
+        }
+        .gp-scene-ico svg { width: 24px; height: 24px; }
+        .gp-scene-body { position: relative; z-index: 1; }
+        .gp-scene-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 2px; }
+        .gp-scene-meta { font-size: 11.5px; color: var(--text-tertiary); font-weight: 500; }
+        .gp-scene-edit {
+            position: absolute; top: 12px; right: 12px; z-index: 2; width: 28px; height: 28px; border-radius: 9px;
+            display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border-glass); color: var(--text-secondary); opacity: 0.65;
+            transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease, color var(--duration-fast) ease;
+        }
+        .gp-scene:hover .gp-scene-edit, .gp-scene-edit:hover { opacity: 1; color: var(--text-primary); }
+        .gp-scene-edit:active { background: rgba(255,255,255,0.12); }
+        .gp-scene-edit svg { width: 14px; height: 14px; }
+        .gp-scene.add { align-items: center; justify-content: center; flex-direction: column; gap: 8px; border-style: dashed; border-color: var(--border-glass-strong); background: rgba(255,255,255,0.02); color: var(--text-tertiary); }
+        .gp-scene.add:hover { color: var(--accent-light); border-color: rgba(124,58,237,0.4); }
+        .gp-scene.add .gp-plus { width: 40px; height: 40px; border-radius: 13px; display: flex; align-items: center; justify-content: center; background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.25); }
+        .gp-scene.add .gp-plus svg { width: 22px; height: 22px; }
+        .gp-scene.add span { font-size: 13px; font-weight: 700; }
+
+        /* Group + automation cards */
+        .gp-list { display: flex; flex-direction: column; gap: 11px; }
+        .gp-card {
+            position: relative; border-radius: 20px; padding: 16px; overflow: hidden;
+            background: var(--bg-card-gradient); border: 1px solid var(--border-glass);
+            border-top-color: var(--border-top-highlight); box-shadow: var(--shadow-sm);
+        }
+        .gp-card-head { display: flex; align-items: center; gap: 13px; }
+        .gp-card-ico {
+            width: 46px; height: 46px; flex-shrink: 0; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+            background: var(--ico-bg, rgba(20,184,166,0.15)); color: var(--ico-fg, #5eead4); border: 1px solid var(--ico-br, rgba(20,184,166,0.26));
+        }
+        .gp-card-ico svg { width: 23px; height: 23px; }
+        .gp-card-info { flex: 1; min-width: 0; }
+        .gp-card-name { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+        .gp-card-sub { font-size: 12px; color: var(--text-tertiary); font-weight: 500; margin-top: 2px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+        .gp-pos-chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(20,184,166,0.14); color: #5eead4; border: 1px solid rgba(20,184,166,0.24); }
+        .gp-pos-chip.closed { background: rgba(148,163,184,0.14); color: var(--text-secondary); border-color: rgba(148,163,184,0.2); }
+        .gp-card-edit { width: 34px; height: 34px; flex-shrink: 0; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); color: var(--text-tertiary); cursor: pointer; transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
+        .gp-card-edit:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        .gp-card-edit svg { width: 16px; height: 16px; }
+
+        /* avatar stack */
+        .gp-avatars { display: flex; align-items: center; }
+        .gp-avatar { width: 26px; height: 26px; border-radius: 8px; margin-left: -7px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #5eead4; background: linear-gradient(135deg, #134e4a, #0f2e2c); border: 2px solid var(--bg-secondary); box-shadow: var(--shadow-xs); }
+        .gp-avatar:first-child { margin-left: 0; }
+        .gp-avatar.more { color: var(--text-secondary); background: var(--bg-elevated); }
+
+        /* group inline controls */
+        .gp-group-ctrl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-glass); }
+        .gp-mini {
+            display: flex; align-items: center; justify-content: center; gap: 5px; padding: 10px 4px; border-radius: 12px;
+            font-size: 11.5px; font-weight: 700; cursor: pointer; font-family: var(--font-family);
+            color: var(--text-secondary); background: rgba(255,255,255,0.045); border: 1px solid var(--border-glass);
+            transition: transform var(--duration-fast) var(--spring), background var(--duration-fast) ease, color var(--duration-fast) ease;
+        }
+        .gp-mini svg { width: 15px; height: 15px; }
+        .gp-mini:hover { background: rgba(255,255,255,0.09); color: var(--text-primary); }
+        .gp-mini:active { transform: scale(0.93); }
+        .gp-mini.stop { color: var(--danger-light); }
+
+        /* automation toggle row */
+        .gp-auto-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--border-glass); }
+        .gp-auto-target { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+        .gp-auto-target .arrow { color: var(--text-muted); }
+        .gp-accent-bar { position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px; border-radius: 0 4px 4px 0; background: var(--ico-fg, #5eead4); opacity: 0.9; }
+        .gp-card.disabled { opacity: 0.62; }
+        .gp-card.disabled .gp-accent-bar { opacity: 0.3; }
+
+        /* toggle (matches app) */
+        .gp-toggle { position: relative; display: inline-block; width: 46px; height: 27px; flex-shrink: 0; cursor: pointer; }
+        .gp-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .gp-toggle .tk { position: absolute; inset: 0; border-radius: 999px; background: rgba(255,255,255,0.12); border: 1px solid var(--border-glass); transition: background 0.28s var(--spring); }
+        .gp-toggle .th { position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3); transition: transform 0.3s var(--spring); }
+        .gp-toggle input:checked + .tk { background: var(--accent-gradient); border-color: transparent; }
+        .gp-toggle input:checked + .tk + .th, .gp-toggle input:checked ~ .th { transform: translateX(19px); }
+
+        /* empty states */
+        .gp-empty { text-align: center; padding: 40px 20px; color: var(--text-tertiary); }
+        .gp-empty-ico { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 20px; display: flex; align-items: center; justify-content: center; background: var(--bg-glass); border: 1px solid var(--border-glass); }
+        .gp-empty-ico svg { width: 30px; height: 30px; opacity: 0.6; }
+        .gp-empty h3 { font-size: 16px; font-weight: 700; color: var(--text-secondary); margin: 0 0 5px; }
+        .gp-empty p { font-size: 13px; margin: 0 auto; max-width: 280px; line-height: 1.5; }
+
+        /* ---- Bottom sheet ---- */
+        .gp-sheet-bd {
+            position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .gp-sheet-bd.open { opacity: 1; pointer-events: auto; }
+        .gp-sheet {
+            position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; max-width: 720px; margin: 0 auto;
+            max-height: 92vh; max-height: 92dvh; display: flex; flex-direction: column;
+            background: var(--bg-glass-strong); backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+            border: 1px solid var(--border-glass-strong); border-bottom: none;
+            border-radius: 28px 28px 0 0; box-shadow: 0 -20px 60px rgba(0,0,0,0.5);
+            transform: translateY(100%); transition: transform 0.42s var(--premium-ease);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        .gp-sheet-bd.open .gp-sheet { transform: translateY(0); }
+        .gp-sheet-handle { width: 40px; height: 4px; border-radius: 999px; background: var(--text-muted); margin: 10px auto 2px; flex-shrink: 0; }
+        .gp-sheet-head { display: flex; align-items: center; gap: 12px; padding: 8px 20px 14px; flex-shrink: 0; }
+        .gp-sheet-head h2 { font-family: var(--font-display); font-size: 19px; font-weight: 800; margin: 0; flex: 1; letter-spacing: -0.01em; }
+        .gp-sheet-x { width: 34px; height: 34px; border-radius: 11px; background: rgba(255,255,255,0.06); border: 1px solid var(--border-glass); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .gp-sheet-x svg { width: 17px; height: 17px; }
+        .gp-sheet-body { overflow-y: auto; padding: 4px 20px 8px; -webkit-overflow-scrolling: touch; }
+        .gp-sheet-foot { display: flex; gap: 10px; padding: 14px 20px calc(14px + env(safe-area-inset-bottom, 0px)); flex-shrink: 0; border-top: 1px solid var(--border-glass); background: linear-gradient(180deg, transparent, rgba(0,0,0,0.12)); }
+
+        .gp-btn { flex: 1; padding: 14px; border-radius: 15px; font-family: var(--font-family); font-size: 14.5px; font-weight: 700; cursor: pointer; border: 1px solid var(--border-glass); transition: transform var(--duration-fast) var(--spring), filter var(--duration-fast) ease; }
+        .gp-btn:active { transform: scale(0.97); }
+        .gp-btn.ghost { background: rgba(255,255,255,0.05); color: var(--text-secondary); }
+        .gp-btn.primary { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 8px 22px rgba(124,58,237,0.36); }
+        .gp-btn.primary:hover { filter: brightness(1.06); }
+        .gp-btn.danger-ghost { flex: 0 0 auto; width: 52px; padding: 14px 0; background: rgba(239,68,68,0.1); color: var(--danger-light); border-color: rgba(239,68,68,0.25); }
+        .gp-btn.danger-ghost svg { width: 18px; height: 18px; }
+
+        /* sheet form bits */
+        .gp-field { margin-bottom: 18px; }
+        .gp-label { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 9px; }
+        .gp-input {
+            width: 100%; padding: 13px 14px; border-radius: 14px; font-family: var(--font-family); font-size: 15px; font-weight: 600;
+            color: var(--text-primary); background: var(--bg-glass); border: 1px solid var(--border-glass); transition: border-color var(--duration-fast) ease;
+        }
+        .gp-input:focus { outline: none; border-color: rgba(124,58,237,0.5); }
+        .gp-input::placeholder { color: var(--text-muted); }
+
+        /* icon picker */
+        .gp-icon-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+        .gp-icon-opt { aspect-ratio: 1; border-radius: 13px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: var(--bg-glass); border: 1px solid var(--border-glass); color: var(--text-secondary); transition: transform var(--duration-fast) var(--spring), border-color var(--duration-fast) ease, background var(--duration-fast) ease; }
+        .gp-icon-opt svg { width: 21px; height: 21px; }
+        .gp-icon-opt:active { transform: scale(0.9); }
+        .gp-icon-opt.sel { background: var(--accent-gradient-subtle); border-color: rgba(124,58,237,0.5); color: var(--accent-light); }
+
+        /* segmented (sheet) */
+        .gp-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: var(--bg-glass); border: 1px solid var(--border-glass); }
+        .gp-seg button { border: none; background: none; cursor: pointer; padding: 11px 6px; border-radius: 10px; font-family: var(--font-family); font-size: 13px; font-weight: 700; color: var(--text-tertiary); display: flex; flex-direction: column; align-items: center; gap: 5px; transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
+        .gp-seg button svg { width: 18px; height: 18px; }
+        .gp-seg button.sel { background: var(--accent-gradient); color: #fff; box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+
+        /* device multiselect */
+        .gp-dev-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
+        .gp-dev {
+            display: flex; align-items: center; gap: 12px; padding: 12px 13px; border-radius: 14px; cursor: pointer;
+            background: var(--bg-glass); border: 1px solid var(--border-glass); transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+        }
+        .gp-dev.sel { border-color: rgba(20,184,166,0.5); background: rgba(20,184,166,0.08); }
+        .gp-dev-ico { width: 38px; height: 38px; flex-shrink: 0; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: rgba(20,184,166,0.14); color: #5eead4; border: 1px solid rgba(20,184,166,0.24); }
+        .gp-dev-ico svg { width: 19px; height: 19px; }
+        .gp-dev-info { flex: 1; min-width: 0; }
+        .gp-dev-name { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gp-dev-sub { font-size: 11.5px; color: var(--text-tertiary); font-weight: 500; }
+        .gp-check { width: 24px; height: 24px; flex-shrink: 0; border-radius: 8px; border: 2px solid var(--border-glass-strong); display: flex; align-items: center; justify-content: center; color: #fff; transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease; }
+        .gp-check svg { width: 14px; height: 14px; opacity: 0; transition: opacity var(--duration-fast) ease; }
+        .gp-dev.sel .gp-check { background: var(--success); border-color: var(--success); }
+        .gp-dev.sel .gp-check svg { opacity: 1; }
+        .gp-quick-pick { display: flex; gap: 8px; margin-bottom: 10px; }
+        .gp-quick-pick button { flex: 1; padding: 8px; border-radius: 10px; font-family: var(--font-family); font-size: 12px; font-weight: 700; cursor: pointer; color: var(--text-secondary); background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); }
+
+        /* day pills */
+        .gp-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .gp-day { aspect-ratio: 1; border-radius: 11px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text-tertiary); background: var(--bg-glass); border: 1px solid var(--border-glass); transition: transform var(--duration-fast) var(--spring), background var(--duration-fast) ease, color var(--duration-fast) ease; }
+        .gp-day:active { transform: scale(0.9); }
+        .gp-day.sel { background: var(--accent-gradient); color: #fff; border-color: transparent; box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+
+        /* target preset + slider */
+        .gp-target-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-bottom: 12px; }
+        .gp-tp { padding: 11px 4px; border-radius: 12px; cursor: pointer; font-family: var(--font-family); font-size: 12.5px; font-weight: 700; color: var(--text-secondary); background: var(--bg-glass); border: 1px solid var(--border-glass); transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
+        .gp-tp.sel { background: rgba(20,184,166,0.16); color: #5eead4; border-color: rgba(20,184,166,0.4); }
+        .gp-slider-row { display: flex; align-items: center; gap: 14px; }
+        .gp-range { flex: 1; -webkit-appearance: none; appearance: none; height: 8px; border-radius: 999px; background: rgba(255,255,255,0.1); outline: none; }
+        .gp-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 26px; height: 26px; border-radius: 50%; background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.4); cursor: pointer; }
+        .gp-range::-moz-range-thumb { width: 26px; height: 26px; border: none; border-radius: 50%; background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.4); cursor: pointer; }
+        .gp-range-val { min-width: 54px; text-align: center; font-size: 16px; font-weight: 800; color: #5eead4; font-variant-numeric: tabular-nums; }
+
+        .gp-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.5; margin-top: -4px; }
+        .gp-info-banner { display: flex; gap: 10px; padding: 12px 14px; border-radius: 14px; background: rgba(124,58,237,0.08); border: 1px solid rgba(124,58,237,0.2); margin-bottom: 18px; }
+        .gp-info-banner svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--accent-light); margin-top: 1px; }
+        .gp-info-banner p { margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+
+        /* time input */
+        .gp-time-input { font-variant-numeric: tabular-nums; font-family: var(--font-display); font-size: 22px; font-weight: 800; text-align: center; letter-spacing: 0.04em; }
+
+        @keyframes gpRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes gpFade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes gpFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes gpPop { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+        @keyframes gpPulse { 0%, 100% { box-shadow: 0 0 8px var(--success-glow); } 50% { box-shadow: 0 0 15px var(--success-glow); } }
+
+        /* ── Coordinated entrance + micro-interactions ─────────────── */
+        .gp-topbar { animation: gpFade 0.5s ease both; }
+        .gp-tabs { animation: gpRise 0.55s var(--premium-ease) 0.06s backwards; }
+        .gp-conn.online .dot { animation: gpPulse 2.4s ease-in-out infinite; }
+
+        /* Group/automation cards: lift on hover, press on tap */
+        .gp-card { transition: transform 0.32s var(--spring), border-color 0.2s ease, box-shadow 0.32s ease; }
+        @media (hover: hover) { .gp-card:hover { transform: translateY(-2px); border-color: var(--border-glass-strong); box-shadow: var(--shadow-lg); } }
+        .gp-card:active { transform: scale(0.992); }
+
+        /* Inline control + edit button presses */
+        .gp-card-edit { transition: transform 0.16s var(--spring), background var(--duration-fast) ease, color var(--duration-fast) ease; }
+        .gp-card-edit:active { transform: scale(0.9); }
+        .gp-add-btn svg { transition: transform 0.3s var(--spring); }
+        .gp-add-btn:hover svg { transform: rotate(90deg); }
+
+        /* Press feedback on every tappable control in the sheets */
+        .gp-tp { transition: transform 0.16s var(--spring), background var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease; }
+        .gp-tp:active { transform: scale(0.94); }
+        .gp-seg button:active { transform: scale(0.95); }
+        .gp-quick-pick button { transition: transform 0.16s var(--spring), background var(--duration-fast) ease; }
+        .gp-quick-pick button:active { transform: scale(0.94); }
+        .gp-dev { transition: transform 0.16s var(--spring), border-color var(--duration-fast) ease, background var(--duration-fast) ease; }
+        .gp-dev:active { transform: scale(0.99); }
+        .gp-dev .gp-check { transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform 0.2s var(--spring); }
+        .gp-dev.sel .gp-check { transform: scale(1.08); }
+
+        /* Automation trigger-type selector: animate the icon of the active type */
+        .gp-seg button svg { transition: transform 0.32s cubic-bezier(0.34, 1.4, 0.5, 1); }
+        .gp-seg button.sel svg { transform: scale(1.14); }
+
+        /* Smooth swap of the automation editor's dynamic section on type change */
+        #atDynamic { transition: opacity 0.15s ease, transform 0.18s var(--smooth); will-change: opacity, transform; }
+        #atDynamic.gp-swap-out { opacity: 0; transform: translateY(10px); }
+        #atDynamic.gp-swap-in > .gp-field { animation: gpFadeUp 0.36s var(--premium-ease) backwards; }
+        #atDynamic.gp-swap-in > .gp-field:nth-child(1) { animation-delay: 0.02s; }
+        #atDynamic.gp-swap-in > .gp-field:nth-child(2) { animation-delay: 0.08s; }
+        #atDynamic.gp-swap-in > .gp-field:nth-child(3) { animation-delay: 0.14s; }
+        #atDynamic.gp-swap-in > .gp-field:nth-child(4) { animation-delay: 0.20s; }
+
+        /* Empty state */
+        .gp-empty { animation: gpRise 0.5s var(--premium-ease) backwards; }
+        .gp-empty-ico { animation: gpPop 0.55s cubic-bezier(0.34, 1.5, 0.5, 1) 0.08s both; }
+
+        /* Sheet content staggers in (by real child order) after the sheet slides up */
+        .gp-sheet-bd.open .gp-sheet-body > * { animation: gpFadeUp 0.4s var(--premium-ease) backwards; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(1) { animation-delay: 0.05s; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(2) { animation-delay: 0.09s; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(3) { animation-delay: 0.13s; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(4) { animation-delay: 0.17s; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(5) { animation-delay: 0.21s; }
+        .gp-sheet-bd.open .gp-sheet-body > *:nth-child(n+6) { animation-delay: 0.24s; }
+
+        /* light theme tweaks */
+        [data-theme="light"] .gp-track, [data-theme="light"] .gp-chip, [data-theme="light"] .gp-act,
+        [data-theme="light"] .gp-mini, [data-theme="light"] .gp-input, [data-theme="light"] .gp-dev,
+        [data-theme="light"] .gp-day, [data-theme="light"] .gp-tp, [data-theme="light"] .gp-seg { background: rgba(0,0,0,0.03); }
+        [data-theme="light"] .gp-ring .track { stroke: rgba(0,0,0,0.08); }
+        [data-theme="light"] .gp-avatar { border-color: #fff; }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+        }
+
+        @media (max-width: 360px) {
+            .gp-ring { width: 72px; height: 72px; }
+            .gp-ring-val { font-size: 20px; }
+            .gp-act { padding: 8px 3px; font-size: 10px; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="gp-ambient" aria-hidden="true">
+        <div class="gp-orb gp-orb-1"></div>
+        <div class="gp-orb gp-orb-2"></div>
+        <div class="gp-orb gp-orb-3"></div>
+    </div>
+
+    <!-- SVG gradient defs for the ring -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <linearGradient id="gpRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#2dd4bf" />
+                <stop offset="55%" stop-color="#14b8a6" />
+                <stop offset="100%" stop-color="#a855f7" />
+            </linearGradient>
+        </defs>
+    </svg>
+
+    <div class="gp-app">
+        <!-- Top bar -->
+        <div class="gp-topbar">
+            <button class="gp-iconbtn" id="backBtn" aria-label="Back to home">
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <div class="gp-topbar-title">
+                <h1>Spaces</h1>
+                <span class="gp-sub">Control every blind together</span>
+            </div>
+            <div class="gp-conn" id="connBadge"><span class="dot"></span><span id="connText">Offline</span></div>
+            <button class="gp-iconbtn" id="themeToggle" aria-label="Toggle theme">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+            </button>
+        </div>
+
+        <!-- Hero master -->
+        <section class="gp-hero" id="masterHero" aria-label="All blinds master control">
+            <div class="gp-hero-top">
+                <div class="gp-ring" aria-hidden="true">
+                    <svg viewBox="0 0 120 120">
+                        <circle class="track" cx="60" cy="60" r="52"></circle>
+                        <circle class="prog" id="ringProg" cx="60" cy="60" r="52" stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
+                    </svg>
+                    <div class="gp-ring-center">
+                        <span class="gp-ring-val" id="ringVal">--</span>
+                        <span class="gp-ring-lbl">Open</span>
+                    </div>
+                </div>
+                <div class="gp-hero-meta">
+                    <div class="gp-hero-h" id="heroTitle">All Blinds</div>
+                    <div class="gp-stat-row">
+                        <span class="gp-chip" id="chipCount"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18"/><path d="M20 7H8"/><path d="M20 11H8"/><path d="M10 19h10"/><path d="M8 15h12"/><path d="M4 3v14"/><circle cx="4" cy="19" r="2"/></svg><span>0 blinds</span></span>
+                        <span class="gp-chip" id="chipOnline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></svg><span>0 online</span></span>
+                        <span class="gp-chip live" id="chipMoving" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span>Moving</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="gp-master-slider">
+                <div class="gp-ms-labels"><span>Closed</span><span class="gp-ms-value" id="masterValueLabel">50%</span><span>Open</span></div>
+                <div class="gp-track" id="masterTrack" role="slider" aria-label="Set all blinds position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0">
+                    <div class="gp-track-fill" id="masterFill"></div>
+                    <div class="gp-track-handle" id="masterHandle"></div>
+                </div>
+            </div>
+
+            <div class="gp-actions">
+                <button class="gp-act close" data-master="0">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                    <span>Close</span>
+                </button>
+                <button class="gp-act" data-master="50">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>
+                    <span>Half</span>
+                </button>
+                <button class="gp-act open" data-master="100">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                    <span>Open</span>
+                </button>
+                <button class="gp-act stop" data-master="stop">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+                    <span>Stop</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Tabs -->
+        <div class="gp-tabs" id="gpTabs" role="tablist">
+            <span class="gp-tab-pill" id="tabPill"></span>
+            <button class="gp-tab active" data-tab="scenes" role="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+                Scenes
+            </button>
+            <button class="gp-tab" data-tab="groups" role="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Groups
+            </button>
+            <button class="gp-tab" data-tab="automations" role="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m6.41 6.41 2.83 2.83"/><path d="M2 12h4"/><path d="m6.41 17.59 2.83-2.83"/><path d="M12 18v4"/><circle cx="12" cy="12" r="3"/></svg>
+                Automations
+            </button>
+        </div>
+
+        <!-- Scenes panel -->
+        <div class="gp-panel active" id="panel-scenes" role="tabpanel">
+            <div class="gp-sec-head">
+                <div class="gp-sec-title">Scenes<span class="count" id="sceneCount"></span></div>
+                <button class="gp-add-btn" id="addSceneBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New</button>
+            </div>
+            <div class="gp-scene-grid" id="sceneGrid"></div>
+        </div>
+
+        <!-- Groups panel -->
+        <div class="gp-panel" id="panel-groups" role="tabpanel">
+            <div class="gp-sec-head">
+                <div class="gp-sec-title">Groups<span class="count" id="groupCount"></span></div>
+                <button class="gp-add-btn" id="addGroupBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New</button>
+            </div>
+            <div class="gp-list" id="groupList"></div>
+        </div>
+
+        <!-- Automations panel -->
+        <div class="gp-panel" id="panel-automations" role="tabpanel">
+            <div class="gp-sec-head">
+                <div class="gp-sec-title">Automations<span class="count" id="autoCount"></span></div>
+                <button class="gp-add-btn" id="addAutoBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New</button>
+            </div>
+            <div class="gp-list" id="autoList"></div>
+        </div>
+    </div>
+
+    <!-- Bottom sheet -->
+    <div class="gp-sheet-bd" id="sheetBackdrop">
+        <div class="gp-sheet" id="sheet" role="dialog" aria-modal="true">
+            <div class="gp-sheet-handle"></div>
+            <div class="gp-sheet-head">
+                <h2 id="sheetTitle">Sheet</h2>
+                <button class="gp-sheet-x" id="sheetClose" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+            </div>
+            <div class="gp-sheet-body" id="sheetBody"></div>
+            <div class="gp-sheet-foot" id="sheetFoot"></div>
+        </div>
+    </div>
+
+    <!-- Firebase (auth + home scoping) -->
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore-compat.js"></script>
+
+    <!-- MQTT -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+
+    <!-- App modules -->
+    <script src="app.js?v=425.0"></script>
+    <script src="state-store.js?v=425.0"></script>
+    <script src="auth.js?v=425.0"></script>
+    <script src="mqtt.js?v=425.0"></script>
+    <script src="device-service.js?v=425.0"></script>
+    <script src="home-service.js?v=425.0"></script>
+    <script src="groups.js?v=425.0"></script>
+</body>
+
+</html>
