@@ -1,0 +1,210 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================
+    // Users - Private per-user data
+    // ============================================
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      function ownsIndexedHome(homeId) {
+        return request.auth != null &&
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid;
+      }
+
+      // User-side home index. Users own their index, but a home owner must be
+      // able to maintain denormalized member index entries during rename,
+      // member removal, and home deletion.
+      match /homes/{homeId} {
+        allow read, create: if request.auth != null && request.auth.uid == userId;
+        allow update: if request.auth != null && (
+          request.auth.uid == userId ||
+          (
+            ownsIndexedHome(homeId) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+            request.resource.data.name is string &&
+            request.resource.data.name.size() > 0 &&
+            request.resource.data.name.size() <= 120 &&
+            request.resource.data.role == resource.data.role
+          )
+        );
+        allow delete: if request.auth != null && (
+          request.auth.uid == userId ||
+          ownsIndexedHome(homeId)
+        );
+      }
+
+      match /{subcollection=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // ============================================
+    // Homes - Shared access
+    // Owner is determined by the home document's `ownerId` field,
+    // NOT by the members subcollection (avoids circular dependency in batches).
+    // ============================================
+    match /homes/{homeId} {
+
+      // Helper: is user the home owner (reads the HOME doc, not members)
+      function isHomeOwner(uid) {
+        return resource != null && resource.data.ownerId == uid;
+      }
+
+      // Helper: is user a member of this home
+      function isMember(uid) {
+        return exists(/databases/$(database)/documents/homes/$(homeId)/members/$(uid));
+      }
+
+      function isValidShareCodeForJoin(code) {
+        return code is string
+          && code.matches('^[A-HJ-NP-Z2-9]{6}$')
+          && exists(/databases/$(database)/documents/shareCodes/$(code))
+          && get(/databases/$(database)/documents/shareCodes/$(code)).data.homeId == homeId
+          && get(/databases/$(database)/documents/shareCodes/$(code)).data.createdBy ==
+             get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId
+          && get(/databases/$(database)/documents/shareCodes/$(code)).data.expiresAt > request.time.toMillis()
+          && get(/databases/$(database)/documents/shareCodes/$(code)).data.uses <
+             get(/databases/$(database)/documents/shareCodes/$(code)).data.maxUses;
+      }
+
+      function isValidSelfJoin(memberId) {
+        return request.auth.uid == memberId
+          && request.resource.data.keys().hasOnly(['role', 'displayName', 'joinedAt', 'joinedViaCode'])
+          && request.resource.data.keys().hasAll(['role', 'displayName', 'joinedAt', 'joinedViaCode'])
+          && request.resource.data.role == 'member'
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() > 0
+          && request.resource.data.displayName.size() <= 120
+          && request.resource.data.joinedAt is number
+          && isValidShareCodeForJoin(request.resource.data.joinedViaCode);
+      }
+
+      // Any authenticated user can create a home
+      allow create: if request.auth != null;
+
+      // Any member or owner can read
+      allow read: if request.auth != null && (
+        isHomeOwner(request.auth.uid) || isMember(request.auth.uid)
+      );
+
+      // Only owner can update or delete
+      allow update, delete: if request.auth != null && isHomeOwner(request.auth.uid);
+
+      // Members subcollection
+      match /members/{memberId} {
+        // Any member can read, the home owner can read, or a user can read their own doc
+        // (the self-read allows membership checks before joining via share code)
+        allow read: if request.auth != null && (
+          request.auth.uid == memberId ||
+          isMember(request.auth.uid) ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+
+        // The owner can add members. Non-owners may only self-join with
+        // a valid share code carried on the member record.
+        allow create: if request.auth != null && (
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid ||
+          isValidSelfJoin(memberId)
+        );
+
+        // A member can remove themselves (leave) or the owner can remove anyone
+        allow delete: if request.auth != null && (
+          request.auth.uid == memberId ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+
+        // Owner can update roles; members can update only their own display name
+        allow update: if request.auth != null && (
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid ||
+          (
+            request.auth.uid == memberId &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']) &&
+            request.resource.data.displayName is string &&
+            request.resource.data.displayName.size() > 0 &&
+            request.resource.data.displayName.size() <= 120
+          )
+        );
+      }
+
+      // Devices subcollection - any member or owner can CRUD
+      match /devices/{deviceId} {
+        allow read, write: if request.auth != null && (
+          isMember(request.auth.uid) ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+      }
+
+      // Spaces control-center (scenes/groups/automations) - shared home data,
+      // editable by any member, same trust level as /devices. Backs the
+      // cross-device sync in groups.js (SpacesCloud); without it the control
+      // center lived only in one browser's localStorage.
+      match /spaces/{docId} {
+        allow read, write: if request.auth != null && (
+          isMember(request.auth.uid) ||
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid
+        );
+      }
+
+      // Share codes nested under home (if used)
+      match /shareCodes/{codeId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null &&
+          get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid;
+      }
+    }
+
+    // ============================================
+    // Share Codes (top-level lookup collection)
+    // ============================================
+    match /shareCodes/{code} {
+      // Direct lookup by exact code is allowed (needed to redeem a code you were
+      // given). LISTING is denied — otherwise any signed-in user could enumerate
+      // every share code and join any home. (Possession of the code == the secret.)
+      allow get: if request.auth != null;
+      allow list: if false;
+
+      // Only the creator may mint a code, and createdBy must be the caller —
+      // prevents forging codes attributed to someone else.
+      allow create: if request.auth != null
+        && code.matches('^[A-HJ-NP-Z2-9]{6}$')
+        && request.resource.data.keys().hasOnly([
+          'homeId', 'homeName', 'createdBy', 'createdAt', 'expiresAt', 'maxUses', 'uses'
+        ])
+        && request.resource.data.keys().hasAll([
+          'homeId', 'homeName', 'createdBy', 'createdAt', 'expiresAt', 'maxUses', 'uses'
+        ])
+        && request.resource.data.homeId is string
+        && request.resource.data.homeName is string
+        && request.resource.data.homeName.size() > 0
+        && request.resource.data.homeName.size() <= 120
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt is number
+        && request.resource.data.expiresAt is number
+        && request.resource.data.maxUses is number
+        && request.resource.data.uses is number
+        && request.resource.data.uses == 0
+        && request.resource.data.maxUses > 0
+        && request.resource.data.maxUses <= 10
+        && request.resource.data.expiresAt > request.time.toMillis()
+        && request.resource.data.expiresAt <= request.time.toMillis() + 90000000
+        && get(/databases/$(database)/documents/homes/$(request.resource.data.homeId)).data.ownerId == request.auth.uid;
+
+      // The creator may update freely (e.g. revoke). Everyone else may ONLY
+      // redeem, and the sole field they can touch is the `uses` counter — they
+      // cannot repoint `homeId`, reset `uses`, or extend `expiresAt`.
+      allow update: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid ||
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses']) &&
+          request.resource.data.uses == resource.data.uses + 1 &&
+          request.resource.data.uses <= resource.data.maxUses
+        )
+      );
+
+      // Only the creator can delete
+      allow delete: if request.auth != null && resource.data.createdBy == request.auth.uid;
+    }
+  }
+}
