@@ -1,8 +1,0 @@
-{
-  "name": "zaylo-remote",
-  "private": true,
-  "description": "Zaylo PWA. Static site - no build step. `npm test` runs the unit/contract suite (Node >= 20, no dependencies).",
-  "scripts": {
-    "test": "node --test \"tests/*.test.js\""
-  }
-}
